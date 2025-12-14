@@ -42,4 +42,41 @@ defmodule ACN.Tools.Validation do
       "Verdict Recorded: #{status}"
     end
   end
+
+  defmodule DefectReporting do
+    @behaviour ACN.Tools.ToolBehaviour
+    require Logger
+
+    def definition do
+      %{
+        "name" => "generate_defect_report",
+        "description" => "Generates a structured defect report for the Specialist.",
+        "parameters" => %{
+          "type" => "object",
+          "properties" => %{
+            "root_cause" => %{
+              "type" => "string",
+              "description" => "A concise explanation of why the validation failed."
+            },
+            "instruction" => %{
+              "type" => "string",
+              "description" => "Specific technical instruction on how to fix the code."
+            },
+            "severity" => %{
+              "type" => "string",
+              "enum" => ["critical", "minor"],
+              "description" => "Is this a blocker?"
+            }
+          },
+          "required" => ["root_cause", "instruction", "severity"]
+        }
+      }
+    end
+
+    def execute(args) do
+      # We return the arguments directly as a JSON string so the Agent can decode it
+      # and pass it to the Controller.
+      Jason.encode!(args)
+    end
+  end
 end

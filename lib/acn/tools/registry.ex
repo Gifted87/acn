@@ -13,7 +13,8 @@ defmodule ACN.Tools.Registry do
     "link_dependency" => ACN.Tools.Planning.LinkDependency,
     "generate_gm_query" => ACN.Tools.Memory.GenerateQuery,
     "report_static_status" => ACN.Tools.Validation.Static,
-    "upstream_merge" => ACN.Tools.Lattice.UpstreamMerge
+    "upstream_merge" => ACN.Tools.Lattice.UpstreamMerge,
+    "generate_defect_report" => ACN.Tools.Validation.DefectReporting
   }
 
   @doc """

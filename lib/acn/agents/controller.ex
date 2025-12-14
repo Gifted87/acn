@@ -383,42 +383,86 @@ defmodule ACN.Agents.Controller do
   def handle_cast({:validation_failure, report}, %{phase: :validation} = state) do
     if state.timer_ref, do: Process.cancel_timer(state.timer_ref)
     
-    # Check if Stale Context suspected (Phase 2)
-    failure_reason = report[:reason] # :possible_stale_context or nil
-    
-    if failure_reason == :possible_stale_context do
-       Logger.info("Validation FAILED (Possible Stale Context). Triggering Lattice Refresh Protocol.")
-    else
-       Logger.info("Validation FAILED. Defect detected.")
-    end
+    Logger.info("Validation FAILED. Engaging Strategist for Root Cause Analysis...")
 
-    # Emit pain signal to LiveWire (Low pain for stale context?)
-    pain_level = if failure_reason == :possible_stale_context, do: 5, else: 10
-    Router.route({:pain_signal, pain_level}, {:local, :live_wire})
+    # Emit pain signal to LiveWire
+    Router.route({:pain_signal, 10}, {:local, :live_wire})
 
     if state.validation_retry_count < 3 do
-       Logger.info("Triggering Refactor Workflow... (Retry ##{state.validation_retry_count + 1})")
+       # WORKFLOW L4: Load Strategist for Root Cause Analysis
+       failure_type = if report[:reason] == :possible_stale_context, do: "stale_context", else: "validation_failure"
+       
+       vars = %{
+         failure_type: failure_type,
+         retry_count: state.validation_retry_count,
+         report: report
+       }
+       
+       {:ok, profile} = ACN.Core.ProfileLoader.load("controller_strategist", vars)
+       buffer = ACN.AI.ContextBuffer.new(profile["system_prompt"])
+       config = %{adapter: ACN.AI.Adapters.OpenAI, opts: [model: profile["model"], temperature: profile["temperature"]]}
 
-       # 1. Read existing file from path
-       path = state.draft_buffer[:path]
-       existing_worksheet = 
-         case File.read(path) do
-           {:ok, content} -> %{path => content}
-           _ -> %{}
+       # Run Strategist Analysis
+       strategy = 
+         case ACN.AI.Pipeline.run(buffer, [], config) do
+            {:ok, msg, _} ->
+              try do
+                Jason.decode!(msg.content)
+              rescue
+                _ -> 
+                  Logger.warning("Strategist returned invalid JSON. Falling back to refactor.")
+                  %{"remediation" => "refactor", "specialist_hint" => "Fix the validation failure."}
+              end
+            _ -> 
+              %{"remediation" => "refactor", "specialist_hint" => "Fix the validation failure."}
          end
 
-       # 2. Augment Report with Stale Hint
-       enriched_report = 
-         if failure_reason == :possible_stale_context do
-            Map.put(report, "hint", "CRITICAL: The Validator suspects STALE CONTEXT (missing dependencies). You MUST run 'lattice_refresh_context' FIRST to download the latest artifacts from the Parent, then re-verify/re-write.")
-         else
-            report
-         end
+       Logger.info("Strategist Decision: #{inspect(strategy)}")
 
-       # 3. Dispatch to Specialist for Refactor
-       Router.route({:execute_refactor, enriched_report, state.local_rules, existing_worksheet}, {:local, :specialist})
+       # Execute Remediation Strategy
+       case strategy["remediation"] do
+         "abort" ->
+           Logger.error("STRATEGIST DECISION: Aborting task. Root cause: #{strategy["root_cause"]}")
+           {:noreply, %{state | phase: :failed}}
 
-       {:noreply, %{state | validation_retry_count: state.validation_retry_count + 1, phase: :delegating}}
+         "refresh_context" ->
+           Logger.info("STRATEGIST DECISION: Refresh context first, then retry.")
+           # Dispatch refresh hint to Specialist
+           path = state.draft_buffer[:path]
+           existing_worksheet = 
+             case File.read(path) do
+               {:ok, content} -> %{path => content}
+               _ -> %{}
+             end
+
+           enriched_report = Map.merge(report, %{
+             "hint" => "CRITICAL: #{strategy["specialist_hint"]} Run 'lattice_refresh_context' FIRST.",
+             "strategist_analysis" => strategy
+           })
+
+           Router.route({:execute_refactor, enriched_report, state.local_rules, existing_worksheet}, {:local, :specialist})
+           {:noreply, %{state | validation_retry_count: state.validation_retry_count + 1, phase: :delegating}}
+
+         _ -> # "refactor" or fallback
+           Logger.info("STRATEGIST DECISION: Dispatch to Specialist for refactor.")
+           
+           # Read existing file from path
+           path = state.draft_buffer[:path]
+           existing_worksheet = 
+             case File.read(path) do
+               {:ok, content} -> %{path => content}
+               _ -> %{}
+             end
+
+           # Enrich report with Strategist's hint
+           enriched_report = Map.merge(report, %{
+             "hint" => strategy["specialist_hint"] || "Fix the validation failure.",
+             "strategist_analysis" => strategy
+           })
+
+           Router.route({:execute_refactor, enriched_report, state.local_rules, existing_worksheet}, {:local, :specialist})
+           {:noreply, %{state | validation_retry_count: state.validation_retry_count + 1, phase: :delegating}}
+       end
     else
        Logger.error("CRITICAL FAILURE. Max retries exceeded. Giving Up.")
        {:noreply, %{state | phase: :failed}}

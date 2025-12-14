@@ -140,29 +140,25 @@ defmodule ACN.Agents.Validator do
   end
   
 
-  # New Callback for Tool Verdict
   @impl true
   def handle_cast({:static_verdict, status, issues}, state) do
       Logger.info("Validator: Static Verdict Received: #{status}")
       
       case status do
         "CLEAN" ->
-          # Pass! Move to Dynamic Testing
-          Logger.info("Validator: Static Analysis CLEAN. Dispatching to TestPilot for dynamic testing.")
-          Router.route({:request_execution, "mix test"}, {:local, :validator})
+          Logger.info("Validator: Static Analysis CLEAN. Dispatching to TestPilot.")
+          ACN.Core.Router.route({:request_execution, "mix test"}, {:local, :validator})
           {:noreply, %{state | verdict_history: state.verdict_history ++ [{:static_analysis, :pass}]}}
           
         "DIRTY" ->
-          # Fail! Report issues.
-          Logger.info("Validator: Static Analysis DIRTY. Reporting failure.")
-          Router.route({:validation_failure, %{hash: state.current_artifact, reason: "Static Analysis Failed: #{inspect(issues)}"}}, {:local, :controller})
-          {:noreply, %{state | verdict_history: state.verdict_history ++ [{:static_analysis, :fail, issues}]}}
+          # --- CHANGED: Trigger Coroner Workflow ---
+          Logger.info("Validator: Static Analysis DIRTY. Engaging Coroner.")
+          evidence = Enum.join(issues, "\n")
+          run_coroner(:static, "Static Analysis (Lint/Safety)", evidence, state)
           
         _ ->
-           # Unknown. Fail safe.
-          Logger.warning("Validator: Static Analysis Verdict Unknown. Reporting failure.")
-          Router.route({:validation_failure, %{hash: state.current_artifact, reason: "Static Analysis Verdict Unknown"}}, {:local, :controller})
-          {:noreply, %{state | verdict_history: state.verdict_history ++ [{:static_analysis, :unknown}]}}
+          Logger.warning("Validator: Verdict Unknown.")
+          {:noreply, state}
       end
   end
 
@@ -200,8 +196,8 @@ defmodule ACN.Agents.Validator do
   def handle_cast({:action_result, output, exit_code}, state) do
     Logger.info("Test finished (Exit: #{exit_code}). Analyzing logs...")
 
-    # 3. Analyze Results via AI
-    vars = %{exit_code: exit_code, output: String.slice(output, 0, 4000)} # Truncate for safety
+    # 1. Analyze Results via AI (Result Analyst)
+    vars = %{exit_code: exit_code, output: String.slice(output, 0, 4000)}
     {:ok, profile} = ACN.Core.ProfileLoader.load("validator_result_analyst", vars)
 
     buffer = ACN.AI.ContextBuffer.new(profile["system_prompt"])
@@ -221,28 +217,18 @@ defmodule ACN.Agents.Validator do
     Logger.info("Analyst Verdict: #{inspect(verdict_data)}")
 
     if verdict_data["verdict"] == "pass" do
-       Router.route({:validation_verdict, :pass, %{hash: state.current_artifact, summary: verdict_data["summary"]}}, {:local, :controller})
+       ACN.Core.Router.route({:validation_verdict, :pass, %{hash: state.current_artifact, summary: verdict_data["summary"]}}, {:local, :controller})
+       {:noreply, state}
     else
-       # FAILURE ANALYSIS (Phase 2)
-       # Check for "Stale Context" signatures
-       # We look at the raw 'output' or the summary.
-       # Signatures: "UndefinedFunctionError", "module ... is not loaded", "File not found"
+       # --- CHANGED: Trigger Coroner Workflow (Workflow L3) ---
+       Logger.info("Validator: Failure detected. Engaging Coroner.")
        
-       is_stale = 
-          String.contains?(output, "UndefinedFunctionError") or
-          String.contains?(output, "module") and String.contains?(output, "is not loaded") or
-          String.contains?(output, "no such file or directory")
-
-       if is_stale do
-          Logger.warning("Validator: Detected Possible Stale Context (Missing Module/File).")
-          Router.route({:validation_failure, %{reason: :possible_stale_context, hash: state.current_artifact, report: verdict_data}}, {:local, :controller})
-       else
-          Router.route({:validation_failure, %{hash: state.current_artifact, report: verdict_data}}, {:local, :controller})
-       end
+       # Pass raw output + summary to Coroner
+       evidence = "Summary: #{verdict_data["summary"]}\n\nRaw Output:\n#{String.slice(output, 0, 2000)}"
+       run_coroner(:dynamic, state.pending_command || "Unknown Command", evidence, state)
     end
-
-    {:noreply, state}
   end
+
 
   # Handle failure cases from Actuator (e.g. execution errors) similarly to failed tests
   @impl true
@@ -316,6 +302,78 @@ defmodule ACN.Agents.Validator do
     Router.route({:request_token, payload}, {:local, :controller})
 
     {:noreply, %{state | current_artifact: hash, env_config: env_config, pending_command: command}}
+  end
+
+  defp run_coroner(type, command, evidence, state) do
+    vars = %{
+      failure_type: type, 
+      command_or_rule: command,
+      evidence: evidence
+    }
+    
+    # 1. Load Profile
+    case ACN.Core.ProfileLoader.load("validator_coroner", vars) do
+      {:ok, profile} ->
+        buffer = ACN.AI.ContextBuffer.new(profile["system_prompt"])
+        config = %{adapter: ACN.AI.Adapters.OpenAI, opts: [model: profile["model"], temperature: profile["temperature"]]}
+        allowed_tools = profile["allowed_tools"]
+
+        # 2. Run Pipeline
+        case ACN.AI.Pipeline.run(buffer, allowed_tools, config) do
+          {:ok, msg, _final_buffer} ->
+             # 3. Extract Report from Tool Call
+             # The Pipeline wraps tool outputs in message history, but usually returns the final assistant message.
+             # If the assistant called the tool, we need to find the tool logic in the pipeline or parse the message.
+             # Implementation Detail: ACN.AI.Pipeline.run returns the FINAL assistant message. 
+             # If the Coroner correctly called `generate_defect_report`, the tool execution would have happened inside Pipeline.
+             # The tool returns a JSON string (as per Step 2 above).
+             # We need to look at the message history to find the tool output? 
+             # OR simpler: The tool output is usually fed back to the LLM. 
+             # BUT `DefectReporting.execute` returns the JSON. 
+             # The pipeline implementation provided in codebase returns `{:ok, final_msg, buffer}`.
+             # If the tool terminated the loop, the `content` of the final message might be the tool result if we configured it that way, 
+             # OR we look into `buffer` for the `role: "tool"` message.
+             
+             # Let's look for the Tool Message in the buffer history:
+             tool_msg = 
+               Enum.find(msg.tool_calls || [], fn call -> 
+                 call["function"]["name"] == "generate_defect_report"
+               end)
+             
+             # Wait, `msg` is the assistant's request to call the tool. 
+             # The `ACN.AI.Pipeline` executes it and appends the result to buffer.
+             # We need to grab the result from the buffer.
+             
+             last_tool_msg = 
+               Enum.find(ACN.AI.ContextBuffer.to_list(_final_buffer), fn m -> 
+                 m.role == "tool" # Find the last one?
+               end)
+               
+             report = 
+               if last_tool_msg do
+                 case Jason.decode(last_tool_msg.content) do
+                   {:ok, decoded} -> decoded
+                   _ -> %{reason: "Coroner output malformed", raw: last_tool_msg.content}
+                 end
+               else
+                 %{reason: "Coroner failed to call reporting tool"}
+               end
+
+             # 4. Route to Controller
+             Logger.info("Coroner Report Generated. Routing to Controller.")
+             ACN.Core.Router.route({:validation_failure, report}, {:local, :controller})
+
+          {:error, reason} ->
+             Logger.error("Coroner AI Failed: #{inspect(reason)}")
+             ACN.Core.Router.route({:validation_failure, %{reason: "Coroner Brain Dead"}}, {:local, :controller})
+        end
+
+      {:error, reason} ->
+         Logger.error("Failed to load Coroner profile: #{inspect(reason)}")
+         {:noreply, state}
+    end
+    
+    {:noreply, state}
   end
   
   defp report_failure(hash, reason) do
