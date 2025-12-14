@@ -14,7 +14,8 @@ defmodule ACN.Tools.Registry do
     "generate_gm_query" => ACN.Tools.Memory.GenerateQuery,
     "report_static_status" => ACN.Tools.Validation.Static,
     "upstream_merge" => ACN.Tools.Lattice.UpstreamMerge,
-    "generate_defect_report" => ACN.Tools.Validation.DefectReporting
+    "generate_defect_report" => ACN.Tools.Validation.DefectReporting,
+    "set_node_identity" => ACN.Tools.Supervisor.Identity
   }
 
   @doc """
