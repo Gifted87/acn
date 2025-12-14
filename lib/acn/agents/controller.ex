@@ -36,20 +36,46 @@ defmodule ACN.Agents.Controller do
 
   @impl true
   def init(_) do
-    # Coronation: Generate identity credentials
-    {priv, pub} = TokenAuthority.generate_keypair()
+    # SECURITY: Attempt to restore existing keys from StateBackup first
+    # This prevents token invalidation on Controller restart
+    {priv, pub, is_restored} = 
+      case ACN.Infrastructure.StateBackup.restore("controller") do
+        {:ok, restored_map} when is_map(restored_map) ->
+          # Check if keys exist in backup
+          if restored_map[:private_key] && restored_map[:public_key] do
+            Logger.info("Controller: Restored existing RSA key pair from backup.")
+            {restored_map[:private_key], restored_map[:public_key], true}
+          else
+            Logger.info("Controller: No keys in backup. Generating new key pair.")
+            TokenAuthority.generate_keypair() |> Tuple.append(false)
+          end
+        _ ->
+          Logger.info("Controller: No backup found. Generating new key pair.")
+          TokenAuthority.generate_keypair() |> Tuple.append(false)
+      end
 
-    # Publish Public Key to Registry
+    # If we generated new keys, immediately persist them
+    if !is_restored do
+      Logger.info("Controller: Persisting new key pair to StateBackup.")
+      ACN.Infrastructure.StateBackup.backup("controller", %{
+        private_key: priv,
+        public_key: pub,
+        phase: :idle
+      })
+    end
+
+    # Publish Public Key to Registry (always, in case Registry was reset)
     case NodeRegistry.update_metadata(:controller, %{public_key: pub}) do
       :ok -> Logger.info("Controller Public Key Published.")
       err -> Logger.warning("Failed to publish Public Key: #{inspect(err)}")
     end
 
+    # Build initial state (restore other fields if available)
     initial_state =
       case ACN.Infrastructure.StateBackup.restore("controller") do
-        {:ok, restored_map} ->
+        {:ok, restored_map} when is_map(restored_map) ->
            Logger.info("Restored Controller State.")
-           # Merge restored fields but keep new keys
+           # Merge restored fields with our keys
            struct(ControllerState, Map.to_list(restored_map) ++ [private_key: priv, public_key: pub])
         _ ->
            %ControllerState{
@@ -64,15 +90,11 @@ defmodule ACN.Agents.Controller do
 
   @impl true
   def terminate(_reason, state) do
-    # Strip Keys before saving? Or save them encrypted?
-    # For now, we save everything. In prod, keys shouldn't be on disk normally, OR we re-gen on boot (as we do above).
-    # If we re-gen on boot, we shouldn't overwrite them with restored old keys.
-    # The restore logic above prioritizes new keys.
-
-    # We convert struct to map to be safe with erlang binary
+    # SECURITY: Always persist keys to prevent token invalidation on restart
+    # Keys are persisted in encrypted format by StateBackup
     state_map = Map.from_struct(state)
     ACN.Infrastructure.StateBackup.backup("controller", state_map)
-    Logger.info("Controller Terminating. State saved.")
+    Logger.info("Controller Terminating. State (including keys) saved.")
   end
 
   # --- Calls ---
