@@ -1,0 +1,14 @@
+[package]
+name = "acn_pilot"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+nix = { version = "0.26", features = ["mount", "user", "process", "signal"] }
+libc = "0.2"
+anyhow = "1.0"
+# vsock = "0.3" # Access via libc if crate issues, but crate is safer.
+# Using socket2 for lower level control if needed, but lets try standard
+socket2 = "0.5"

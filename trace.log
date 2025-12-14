@@ -1,0 +1,71 @@
+
+17:27:07.306 [info] === ACN GENESIS ===
+
+17:27:07.316 [info] Task: Full Trace
+17:27:09.432 pid=<0.44.0> [notice] Application mnesia exited: :stopped
+17:27:09.509 pid=<0.509.0> [info] Mnesia: Started
+17:27:09.510 pid=<0.509.0> [info] Mnesia: Table acn_node_registry already exists
+17:27:09.510 pid=<0.509.0> [info] Mnesia: Table acn_node_registry cleared (clean_start=true)
+17:27:09.512 pid=<0.509.0> [info] Mnesia: Tables ready
+17:27:09.561 pid=<0.508.0> [debug] whereis_name(:live_wire)
+17:27:09.589 pid=<0.508.0> [debug] NodeRegistry.lookup(:live_wire) -> {:ok, %{metadata: %{}, node: :nonode@nohost, parent_id: nil, pid: #PID<0.554.0>, role: :leaf}}
+17:27:09.590 pid=<0.44.0> [notice] Application acn exited: ACN.Application.start(:normal, []) returned an error: shutdown: failed to start child: ACN.Agents.LiveWire
+    ** (EXIT) already started: #PID<0.554.0>
+17:27:09.592 pid=<0.44.0> [notice] Application plug_cowboy exited: :stopped
+17:27:09.592 pid=<0.44.0> [notice] Application cowboy_telemetry exited: :stopped
+17:27:09.594 pid=<0.44.0> [notice] Application cowboy exited: :stopped
+17:27:09.595 pid=<0.44.0> [notice] Application ranch exited: :stopped
+17:27:09.595 pid=<0.44.0> [notice] Application cowlib exited: :stopped
+17:27:09.597 pid=<0.44.0> [notice] Application phoenix exited: :stopped
+17:27:09.597 pid=<0.44.0> [notice] Application phoenix_view exited: :stopped
+17:27:09.597 pid=<0.44.0> [notice] Application phoenix_template exited: :stopped
+17:27:09.599 pid=<0.44.0> [notice] Application phoenix_pubsub exited: :stopped
+17:27:09.600 pid=<0.44.0> [notice] Application plug exited: :stopped
+17:27:09.602 pid=<0.44.0> [notice] Application plug_crypto exited: :stopped
+17:27:09.603 pid=<0.44.0> [notice] Application elixir_uuid exited: :stopped
+17:27:09.604 pid=<0.44.0> [notice] Application req exited: :stopped
+17:27:09.605 pid=<0.44.0> [notice] Application nimble_ownership exited: :stopped
+17:27:09.605 pid=<0.44.0> [notice] Application finch exited: :stopped
+17:27:09.606 pid=<0.44.0> [notice] Application mime exited: :stopped
+17:27:09.606 pid=<0.44.0> [notice] Application nimble_options exited: :stopped
+17:27:09.607 pid=<0.44.0> [notice] Application mint exited: :stopped
+17:27:09.608 pid=<0.44.0> [notice] Application hpax exited: :stopped
+17:27:09.609 pid=<0.44.0> [notice] Application exla exited: :stopped
+17:27:09.611 pid=<0.44.0> [notice] Application nimble_pool exited: :stopped
+17:27:09.611 pid=<0.44.0> [notice] Application bumblebee exited: :stopped
+17:27:09.611 pid=<0.44.0> [notice] Application nx_signal exited: :stopped
+17:27:09.612 pid=<0.44.0> [notice] Application progress_bar exited: :stopped
+17:27:09.612 pid=<0.44.0> [notice] Application decimal exited: :stopped
+17:27:09.612 pid=<0.44.0> [notice] Application unzip exited: :stopped
+17:27:09.612 pid=<0.44.0> [notice] Application safetensors exited: :stopped
+17:27:09.612 pid=<0.44.0> [notice] Application unpickler exited: :stopped
+17:27:09.612 pid=<0.44.0> [notice] Application nx_image exited: :stopped
+17:27:09.612 pid=<0.44.0> [notice] Application tokenizers exited: :stopped
+17:27:09.612 pid=<0.44.0> [notice] Application rustler_precompiled exited: :stopped
+17:27:09.613 pid=<0.44.0> [notice] Application castore exited: :stopped
+17:27:09.613 pid=<0.44.0> [notice] Application axon exited: :stopped
+17:27:09.613 pid=<0.44.0> [notice] Application polaris exited: :stopped
+17:27:09.614 pid=<0.44.0> [notice] Application nx exited: :stopped
+17:27:09.616 pid=<0.44.0> [notice] Application telemetry exited: :stopped
+17:27:09.616 pid=<0.44.0> [notice] Application complex exited: :stopped
+17:27:09.616 pid=<0.44.0> [notice] Application rustler exited: :stopped
+17:27:09.616 pid=<0.44.0> [notice] Application yaml_elixir exited: :stopped
+17:27:09.618 pid=<0.44.0> [notice] Application yamerl exited: :stopped
+17:27:09.618 pid=<0.44.0> [notice] Application libgraph exited: :stopped
+17:27:09.618 pid=<0.44.0> [notice] Application joken exited: :stopped
+17:27:09.621 pid=<0.44.0> [notice] Application jose exited: :stopped
+17:27:09.621 pid=<0.44.0> [notice] Application httpoison exited: :stopped
+17:27:09.623 pid=<0.44.0> [notice] Application hackney exited: :stopped
+17:27:09.624 pid=<0.44.0> [notice] Application metrics exited: :stopped
+17:27:09.624 pid=<0.44.0> [notice] Application ssl_verify_fun exited: :stopped
+17:27:09.625 pid=<0.44.0> [notice] Application parse_trans exited: :stopped
+17:27:09.625 pid=<0.44.0> [notice] Application syntax_tools exited: :stopped
+17:27:09.625 pid=<0.44.0> [notice] Application certifi exited: :stopped
+17:27:09.625 pid=<0.44.0> [notice] Application mimerl exited: :stopped
+17:27:09.625 pid=<0.44.0> [notice] Application idna exited: :stopped
+17:27:09.626 pid=<0.44.0> [notice] Application unicode_util_compat exited: :stopped
+17:27:09.626 pid=<0.44.0> [notice] Application jason exited: :stopped
+17:27:09.632 pid=<0.44.0> [notice] Application mnesia exited: :stopped
+17:27:09.633 pid=<0.44.0> [notice] Application eex exited: :stopped
+** (Mix) Could not start application acn: ACN.Application.start(:normal, []) returned an error: shutdown: failed to start child: ACN.Agents.LiveWire
+    ** (EXIT) already started: #PID<0.554.0>
