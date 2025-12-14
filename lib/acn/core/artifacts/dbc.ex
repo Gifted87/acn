@@ -12,7 +12,9 @@ defmodule ACN.Core.Artifacts.DBC do
     :vector_id,     # UUID (Qdrant ID, nil if offline)
     :author_id,     # String
     :verifier_id,   # String (Validator)
-    :cost_metrics,  # Map (Tokens)
+    :validation_proof, # Map (Validator verdict, test output, proof of correctness)
+    :cost_metrics,  # Map (Tokens, execution time, LiveWire data)
+    :constituents,  # List of child DBC IDs (for intermediate nodes)
     :timestamp,     # DateTime
     :provenance_data # Map (Extra context)
   ]

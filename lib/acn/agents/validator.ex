@@ -291,7 +291,13 @@ defmodule ACN.Agents.Validator do
     Logger.info("Validator: Proceeding to Dynamic Test Pilot...")
     
     # 1. Decide on Test Command via AI
-    vars = %{context: env_config, hash: hash, rules: rules}
+    # Ensure env_config includes sandbox mount path for Test Pilot awareness
+    enriched_context = Map.merge(env_config, %{
+      sandbox_mount: "/mnt/source",  # Firecracker sandbox mount point
+      host_cwd: System.get_env("PWD") || "/tmp"
+    })
+    
+    vars = %{context: enriched_context, hash: hash, rules: rules}
     {:ok, profile} = ACN.Core.ProfileLoader.load("validator_test_pilot", vars)
 
     buffer = ACN.AI.ContextBuffer.new(profile["system_prompt"])
@@ -300,7 +306,7 @@ defmodule ACN.Agents.Validator do
     command =
        case ACN.AI.Pipeline.run(buffer, [], config) do
           {:ok, msg, _} -> msg.content |> String.trim() |> String.replace("`", "")
-          _ -> "mix test" # Fallback
+          _ -> "cd /mnt/source && mix test" # Updated fallback with sandbox path
        end
 
     Logger.info("Test Pilot Decision: #{command}")

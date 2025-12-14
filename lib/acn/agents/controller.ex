@@ -567,7 +567,89 @@ defmodule ACN.Agents.Controller do
        Router.route({:spawn_child, task}, {:local, :supervisor})
     end)
 
-    {:noreply, %{state | phase: :monitoring}}
+    # Track active children and remaining batches
+    active_children = MapSet.new(Enum.map(first_batch, fn task -> task.id end))
+    remaining_batches = Enum.drop(state.execution_plan.batches, 1)
+    
+    new_state = Map.merge(state, %{
+      phase: :monitoring,
+      active_children: active_children,
+      remaining_batches: remaining_batches
+    })
+    
+    {:noreply, new_state}
+  end
+
+  # BATCH BARRIER: Track child task completion
+  @impl true
+  def handle_cast({:task_complete, child_id}, %{phase: :monitoring} = state) do
+    Logger.info("Controller: Child task complete: #{child_id}")
+    
+    # Remove from active set
+    new_active = MapSet.delete(state.active_children, child_id)
+    
+    # Check if current batch is complete
+    if MapSet.size(new_active) == 0 do
+      Logger.info("Controller: Current batch complete. Remaining batches: #{length(state.remaining_batches)}")
+      
+      # Check if more batches remain
+      case state.remaining_batches do
+        [] ->
+          # All batches complete - trigger integration
+          Logger.info("Controller: All batches complete. Starting integration.")
+          GenServer.cast(self(), {:internal_transition, :start_integration})
+          {:noreply, %{state | active_children: new_active, phase: :integrating}}
+          
+        [next_batch | rest] ->
+          # Spawn next batch
+          Logger.info("Controller: Spawning next batch (#{length(next_batch)} tasks)")
+          
+          Enum.each(next_batch, fn task ->
+            Logger.info("Spawning Child Node for Task: #{task.id}")
+            Router.route({:spawn_child, task}, {:local, :supervisor})
+          end)
+          
+          next_active = MapSet.new(Enum.map(next_batch, fn task -> task.id end))
+          {:noreply, %{state | active_children: next_active, remaining_batches: rest}}
+      end
+    else
+      # Still waiting for other tasks in current batch
+      {:noreply, %{state | active_children: new_active}}
+    end
+  end
+
+  # Catch-all for task_complete in other phases
+  @impl true
+  def handle_cast({:task_complete, child_id}, state) do
+    Logger.warning("Controller: Received task_complete for #{child_id} in unexpected phase #{state.phase}")
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_cast({:internal_transition, :start_integration}, state) do
+    Logger.info("Controller: Integration phase. Triggering Synthesizer Aggregation.")
+    
+    # 1. Prepare Merge Context (Same as Leaf node)
+    genesis = state.context[:genesis_args] || %{}
+    merge_context = %{
+      parent_id: genesis[:parent_node],
+      slot_id: genesis[:output_slot] || "unknown_slot",
+      task_description: state.context[:task_assignment][:description]
+    }
+    
+    # 2. Define a hash for the "Combined Work"
+    # (Since we are aggregating multiple children, we generate a hash representing the group)
+    merged_hash = "agg_#{UUID.uuid4()}"
+    path_placeholder = "virtual_aggregation" 
+    agent_id = "controller_manager_01"
+
+    # 3. Trigger Synthesizer
+    # The Synthesizer's `handle_cast` logic checks the Node Identity.
+    # It will see :intermediate and run `finalize_intermediate_aggregation` automatically.
+    payload = {:finalize_task, merged_hash, path_placeholder, agent_id, merge_context}
+    Router.route(payload, {:local, :synthesizer})
+
+    {:noreply, %{state | phase: :finalization}}
   end
 
   # Catch-all for action_result if routed here

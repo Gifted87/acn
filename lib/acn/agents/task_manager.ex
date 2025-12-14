@@ -8,6 +8,7 @@ defmodule ACN.Agents.TaskManager do
 
   # --- Public API ---
 
+
   def start_link(_opts \\ []) do
     GenServer.start_link(__MODULE__, [], name: via_tuple())
   end
@@ -125,15 +126,17 @@ defmodule ACN.Agents.TaskManager do
            Map.merge(meta, %{id: id})
         end)
         
-        # Simple sequential batching
-        batches = Enum.map(execution_steps, fn step -> [step] end)
+        # PARALLEL BATCHING: Group tasks by DAG layers
+        # Tasks with no dependencies go in batch 1
+        # Tasks that only depend on batch 1 go in batch 2, etc.
+        batches = compute_parallel_batches(state.graph, execution_steps)
         
         plan = %{
           batches: batches,
           graph_export: Graph.to_edgelist(state.graph)
         }
         
-        Logger.info("TaskManager: Plan Ready. Dispatching to Controller.")
+        Logger.info("TaskManager: Plan Ready. Batches: #{length(batches)}. Dispatching to Controller.")
         ACN.Core.Router.route({:plan_ready, plan}, {:local, :controller})
         
         {:noreply, %{state | phase: :scheduled}}
@@ -188,4 +191,63 @@ defmodule ACN.Agents.TaskManager do
     end
   end
 
+  # Compute parallel batches based on DAG topology
+  # Returns [[batch1_tasks], [batch2_tasks], ...]
+  defp compute_parallel_batches(graph, execution_steps) do
+    # Build a map of task_id -> task_metadata
+    task_map = Map.new(execution_steps, fn step -> {step.id, step} end)
+    
+    # Compute in-degrees for all tasks
+    in_degrees = 
+      Enum.reduce(execution_steps, %{}, fn step, acc ->
+        # Count incoming edges
+        in_degree = Graph.in_degree(graph, step.id)
+        Map.put(acc, step.id, in_degree)
+      end)
+    
+    # Iteratively build batches
+    build_batches(graph, task_map, in_degrees, [])
+  end
+  
+  defp build_batches(_graph, _task_map, in_degrees, batches) when map_size(in_degrees) == 0 do
+    Enum.reverse(batches)
+  end
+  
+  defp build_batches(graph, task_map, in_degrees, batches) do
+    # Find all tasks with in_degree == 0 (no dependencies)
+    ready_ids = 
+      in_degrees
+      |> Enum.filter(fn {_id, degree} -> degree == 0 end)
+      |> Enum.map(fn {id, _} -> id end)
+    
+    if ready_ids == [] do
+      # Cycle detected or error - fallback to remaining tasks in single batch
+      remaining_tasks = 
+        in_degrees
+        |> Map.keys()
+        |> Enum.map(fn id -> Map.get(task_map, id) end)
+      Enum.reverse([remaining_tasks | batches])
+    else
+      # Create batch from ready tasks
+      batch = Enum.map(ready_ids, fn id -> Map.get(task_map, id) end)
+      
+      # Remove these tasks from in_degrees
+      new_in_degrees = Map.drop(in_degrees, ready_ids)
+      
+      # Decrement in-degrees for tasks that depended on completed tasks
+      new_in_degrees = 
+        Enum.reduce(ready_ids, new_in_degrees, fn completed_id, acc ->
+          # Get all tasks that depend on this completed task
+          dependents = Graph.out_neighbors(graph, completed_id)
+          
+          Enum.reduce(dependents, acc, fn dep_id, acc2 ->
+            Map.update(acc2, dep_id, 0, fn deg -> max(0, deg - 1) end)
+          end)
+        end)
+      
+      build_batches(graph, task_map, new_in_degrees, [batch | batches])
+    end
+  end
+
+  defp run_scheduler(), do: :ok  # Stub
 end

@@ -334,6 +334,30 @@ defmodule ACN.Agents.SupervisorAgent do
   end
 
   @impl true
+  def handle_call(:get_identity, _from, state) do
+    # Return current identity (:leaf or :intermediate)
+    identity = state.identity || :leaf
+    {:reply, {:ok, identity}, state}
+  end
+
+  @impl true
+  def handle_call(:get_child_results, _from, state) do
+    # Extract DBCs from worksheet slots
+    # Worksheet slots contain artifacts with metadata
+    # We iterate and collect any DBC structures
+    child_dbcs = 
+      state.worksheet
+      |> Worksheet.to_map()
+      |> Enum.filter(fn {_key, slot} ->
+        # Check if slot is a DBC (has required fields)
+        is_map(slot) and Map.has_key?(slot, :artifact_hash) and Map.has_key?(slot, :fact_text)
+      end)
+      |> Enum.map(fn {_key, dbc} -> dbc end)
+    
+    {:reply, {:ok, child_dbcs}, state}
+  end
+
+  @impl true
   def handle_call({:read_worksheet, key}, _from, state) do
     case Worksheet.get(state.worksheet, key) do
       nil -> {:reply, {:error, :not_found}, state}
