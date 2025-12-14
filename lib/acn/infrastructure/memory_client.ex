@@ -1,133 +1,135 @@
 defmodule ACN.Infrastructure.MemoryClient do
   @moduledoc """
-  Client for the Adaptive Content Management System (ACMS) backed by Qdrant.
-  Handles Vector Ingestion and Semantic Search.
+  Client for the remote Associative Cognitive Memory System (CMS).
+  
+  This module acts as the bridge between the ACN (Agent/Client) and the 
+  CMS (Brain/Server). It communicates exclusively via the CMS REST API.
+  
+  Unlike previous versions, this client performs NO local embedding generation.
+  It offloads semantic indexing, storage, and Hebbian association to the CMS.
   """
   require Logger
   alias ACN.Core.Artifacts.DBC
-  alias ACN.AI.Embedder
 
-  @collection "acms_facts"
-
+  # Default to localhost:4000 if not configured, but ideally set via env var CMS_URL
   defp config do
     config = Application.get_env(:acn, :memory, [])
-    base_url = config[:qdrant_url] || "http://localhost:6333"
-    api_key = config[:qdrant_key]
+    base_url = config[:cms_url] || "http://localhost:4000"
+    api_key = config[:cms_api_key] # Optional, for future auth
 
-    [base_url: base_url, api_key: api_key]
+    [base_url: base_url, headers: build_headers(api_key)]
   end
 
+  defp build_headers(nil), do: [{"content-type", "application/json"}]
+  defp build_headers(key), do: [{"content-type", "application/json"}, {"x-agent-key", key}]
+
   @doc """
-  Ingests a Digital Birth Certificate (DBC) into the Vector DB.
-  Generates the embedding locally before pushing.
+  Ingests a Digital Birth Certificate (DBC) into the remote CMS.
+  
+  Maps the ACN's `DBC` struct to the CMS's expected Ingestion JSON schema.
   """
   def ingest(%DBC{} = dbc) do
     conf = config()
-    url = "#{conf[:base_url]}/collections/#{@collection}/points"
-    headers = if k = conf[:api_key], do: [{"api-key", k}], else: []
+    url = "#{conf[:base_url]}/api/v1/ingest"
 
-    # 1. Generate Vector
-    case Embedder.embed(dbc.fact_text) do
-       {:ok, vector} ->
-          # 2. Construct Qdrant Point
-          vector_id = UUID.uuid4()
+    # 1. Map DBC to CMS Payload (defined in CMS.Web / FIDValidator)
+    # We treat the fact_text as the primary Text payload. 
+    # If the DBC has specific cost metrics or provenance, we attach them as metadata.
+    payloads = [
+      %{"type" => "text", "content" => dbc.fact_text}
+    ]
+    
+    # Add Code payload if it looks like code (simple heuristic or extend DBC to support it)
+    # For now, we stick to the text fact.
 
-          payload = %{
-             "points" => [
-               %{
-                 "id" => vector_id,
-                 "vector" => vector,
-                 "payload" => %{
-                    "artifact_hash" => dbc.artifact_hash,
-                    "fact_text" => dbc.fact_text,
-                    "author_id" => dbc.author_id,
-                    "verifier_id" => dbc.verifier_id,
-                    "timestamp" => DateTime.to_iso8601(dbc.timestamp),
-                    "type" => "dbc"
-                 }
-               }
-             ]
-          }
+    request_body = %{
+      "fact_text" => dbc.fact_text,
+      "agent_id" => dbc.author_id,
+      "description_payloads" => payloads,
+      # Default ACLs: Public read, Author write
+      "acls" => %{"read" => ["public"], "write" => [dbc.author_id]},
+      "provenance" => Map.merge(dbc.provenance_data || %{}, %{
+        "verifier_id" => dbc.verifier_id,
+        "artifact_hash" => dbc.artifact_hash,
+        "origin_timestamp" => DateTime.to_iso8601(dbc.timestamp)
+      })
+    }
 
-          # 3. Push to Qdrant
-          case Req.post(url, json: payload, headers: headers) do
-             {:ok, %Req.Response{status: 200}} ->
-                Logger.info("ACMS Ingest Success: #{vector_id}")
-                {:ok, vector_id}
-             {:ok, %Req.Response{status: status, body: body}} ->
-                Logger.error("ACMS Ingest Failed (#{status}): #{inspect(body)}")
-                {:error, :qdrant_error}
-             {:error, reason} ->
-                Logger.error("ACMS Network Failure: #{inspect(reason)}")
-                {:error, reason}
-          end
+    # 2. Send to CMS
+    case Req.post(url, json: request_body, headers: conf[:headers]) do
+      {:ok, %Req.Response{status: 201, body: %{"node_id" => id}}} ->
+        Logger.info("CMS Ingest Success. Node ID: #{id}")
+        {:ok, id}
 
-       {:error, reason} ->
-          Logger.error("Embedding Generation Failed: #{inspect(reason)}")
-          {:error, :embedding_failed}
+      {:ok, %Req.Response{status: 202, body: %{"meta_node_id" => id, "status" => "conflict_resolved"}}} ->
+        Logger.info("CMS Ingest: Conflict Resolved via Dialectics. Meta-Node ID: #{id}")
+        {:ok, id}
+
+      {:ok, %Req.Response{status: status, body: body}} ->
+        Logger.error("CMS Rejected Ingest (#{status}): #{inspect(body)}")
+        {:error, :cms_rejection}
+
+      {:error, reason} ->
+        Logger.error("CMS Network Failure: #{inspect(reason)}")
+        {:error, :network_failure}
     end
   end
 
   @doc """
-  Performs a semantic search.
-  Returns list of matching DBC metadata.
+  Performs a semantic search against the remote CMS.
+  
+  The CMS handles the vectorization of the query text.
   """
   def query(query_text, limit \\ 5) do
     conf = config()
-    url = "#{conf[:base_url]}/collections/#{@collection}/points/search"
-    headers = if k = conf[:api_key], do: [{"api-key", k}], else: []
+    url = "#{conf[:base_url]}/api/v1/query"
 
-    with {:ok, vector} <- Embedder.embed(query_text),
-         {:ok, %Req.Response{status: 200, body: body}} <- Req.post(url, json: %{vector: vector, limit: limit, with_payload: true}, headers: headers) do
+    request_body = %{
+      "query_text" => query_text,
+      "max_results" => limit,
+      "min_relevance" => 0.6, # Default confidence threshold
+      "agent_id" => "acn_client" # Ideally passed in from caller
+    }
 
-       results =
-         body["result"]
-         |> Enum.map(fn item ->
-            payload = item["payload"]
-            %{
-              score: item["score"],
-              fact_text: payload["fact_text"],
-              artifact_hash: payload["artifact_hash"],
-              vector_id: item["id"]
-            }
-         end)
+    case Req.post(url, json: request_body, headers: conf[:headers]) do
+      {:ok, %Req.Response{status: 200, body: %{"results" => results}}} ->
+        # Normalize results to a simple list of maps for the Agent
+        normalized = Enum.map(results, fn r ->
+          %{
+            fact_text: r["fact"],
+            score: r["score"],
+            node_id: r["node_id"],
+            metadata: r["metadata"]
+          }
+        end)
+        {:ok, normalized}
 
-       {:ok, results}
-    else
-       {:error, reason} -> {:error, reason}
-       {:ok, resp} -> {:error, resp}
+      {:ok, %Req.Response{status: status}} ->
+        Logger.warning("CMS Query Failed with Status: #{status}")
+        {:error, :query_failed}
+
+      {:error, reason} ->
+        Logger.error("CMS Query Network Error: #{inspect(reason)}")
+        {:error, :network_failure}
     end
   end
 
   @doc """
-  Initializes the Qdrant Collection.
+  Checks connectivity to the remote CMS.
+  Replaces the old 'init_collection' logic since the CMS manages its own state.
   """
-  def init_collection do
+  def check_connection do
     conf = config()
-    url = "#{conf[:base_url]}/collections/#{@collection}"
-    headers = if k = conf[:api_key], do: [{"api-key", k}], else: []
+    # Using the embedder health check as a proxy for system health
+    url = "#{conf[:base_url]}/api/v1/health/embedder"
 
-    # Check existence
-    case Req.get(url, headers: headers) do
+    case Req.get(url, headers: conf[:headers]) do
       {:ok, %Req.Response{status: 200}} ->
-         Logger.info("Collection #{@collection} exists.")
-         :ok
+        Logger.info("Remote CMS is Online and Healthy.")
+        :ok
       _ ->
-         Logger.info("Creating Collection #{@collection}...")
-         # Create
-         body = %{
-           "vectors" => %{
-             "size" => 384,
-             "distance" => "Cosine"
-           }
-         }
-         case Req.put(url, json: body, headers: headers) do
-            {:ok, %Req.Response{status: 200}} ->
-               Logger.info("Collection Created.")
-               :ok
-            other ->
-               {:error, other}
-         end
+        Logger.warning("Remote CMS is Unreachable or Unhealthy.")
+        {:error, :cms_offline}
     end
   end
 end
