@@ -28,5 +28,10 @@ config :acn, ACN.PubSub, []
 config :phoenix, :json_library, Jason
 
 config :acn, :clean_start, true
+config :acn, :enable_local_serving, false
+
+# AI Backend Configuration
+config :nx, :default_backend, EXLA.Backend
+config :nx, :default_defn_options, [compiler: EXLA, client: :host]
 
 import_config "#{config_env()}.exs"

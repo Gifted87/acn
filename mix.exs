@@ -47,9 +47,9 @@ defmodule Acn.MixProject do
       {:rustler, "~> 0.29.1"},
 
       # AI / Embeddings / Tensors
-      {:bumblebee, "~> 0.5.0"},
-      {:exla, ">= 0.0.0"},
-      {:nx, "~> 0.7.0"},
+      {:bumblebee, "~> 0.6.0"},
+      {:exla, "~> 0.9.0"},
+      {:nx, "~> 0.9.0"},
 
       # HTTP Client
       {:req, "~> 0.4.0"},

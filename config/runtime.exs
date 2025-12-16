@@ -17,12 +17,17 @@ config :acn, :hardware_adapter,
 
 # CONFIG MANDATE: Fail Fast if Keys are Missing
 if config_env() != :test do
-  openai_key = System.fetch_env!("OPENAI_API_KEY")
-
   config :acn, :ai,
-    default_adapter: ACN.AI.Adapters.OpenAI,
+    default_adapter: ACN.AI.Adapters.OllamaAdapter,
+    local_llm: [
+      repo_id: "driaforall/Tiny-Agent-a-1.5B"
+    ],
+    ollama: [
+      base_url: System.get_env("OLLAMA_BASE_URL", "http://localhost:11434"),
+      model: System.get_env("OLLAMA_MODEL", "driaforall/tiny-agent-a:1.5b")
+    ],
     openai: [
-      api_key: openai_key,
+      api_key: System.get_env("OPENAI_API_KEY"),
       base_url: System.get_env("OPENAI_BASE_URL", "https://api.openai.com/v1"),
       model: System.get_env("OPENAI_MODEL", "gpt-4-turbo-preview"),
       # Safety: Hard timeout for the request itself

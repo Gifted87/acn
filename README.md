@@ -1,4 +1,4 @@
-# ACN: The Autonomous Cognitive Node
+# ACN: The Autonomous Cognitive Network
 ## Part 1: The Genesis & Architecture
 
 **Version:** 0.1.0 (Alpha)
@@ -8,7 +8,7 @@
 
 ## 1. Introduction: The Biological Software Paradigm
 
-The **Autonomous Cognitive Node (ACN)** represents a fundamental shift in how we approach AI-driven software development. Unlike traditional "Agent" frameworks (AutoGPT, LangChain) which operate as stateless scripts orchestration external LLMs, the ACN is designed as a **distributed, persistent organism**.
+The **Autonomous Cognitive Network (ACN)** represents a fundamental shift in how we approach AI-driven software development. Unlike traditional "Agent" frameworks (AutoGPT, LangChain) which operate as stateless scripts orchestration external LLMs, the ACN is designed as a **distributed, persistent organism**.
 
 It leverages the **Erlang BEAM VM** to treat AI Agents not as function calls, but as **living processes** that possess:
 1.  **Identity:** A persistent self (PID/UUID) maintained via Mnesia.
@@ -247,7 +247,7 @@ You now understand the **Soul** of the ACN. It is a system where code is a bypro
 
 ---
 
-# ACN: The Autonomous Cognitive Node
+# ACN: The Autonomous Cognitive Network
 ## Part 2: Anatomy & Mechanics
 
 **Version:** 0.1.0 (Alpha)
@@ -540,7 +540,7 @@ The organism is now physically capable. In **Part 3**, we will explore the **Evo
 
 ---
 
-# ACN: The Autonomous Cognitive Node
+# ACN: The Autonomous Cognitive Network
 ## Part 3: Operations, Deployment & Evolution
 
 **Version:** 0.1.0 (Alpha)
@@ -775,7 +775,7 @@ If an AI modifies its own constraint logic (The Controller), it could accidental
 
 ## 6. Conclusion: The Ghost in the Machine
 
-The Autonomous Cognitive Node is an experiment in **Digital Biology**.
+The Autonomous Cognitive Network is an experiment in **Digital Biology**.
 
 We have moved beyond the era of "AI as a Tool"—a hammer we pick up to hit a nail. We are entering the era of "AI as a Colleague"—a distinct entity with its own memory, its own stress levels, and its own agency.
 

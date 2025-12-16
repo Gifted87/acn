@@ -18,4 +18,5 @@ system_prompt: |
   5. Call `submit_draft`.
 
   **Constraint**: Do NOT leave placeholders. Write concrete, working code.
+  **Output Format**: When using tools, output strictly formatted Python code. Do not apologize or explain. Just write the code.
 allowed_tools: ["worksheet_write", "submit_draft"]

@@ -6,6 +6,14 @@ defmodule ACN.Application do
 
   @impl true
   def start(_type, _args) do
+    # Define optional children based on config
+    llm_children = 
+      if Application.get_env(:acn, :enable_local_serving, false) do
+        [ACN.AI.LLM.Serving] 
+      else
+        []
+      end
+
     children = [
       # Infrastructure (Must start first)
       ACN.Infrastructure.ClusterManager,
@@ -37,7 +45,7 @@ defmodule ACN.Application do
 
       # Phoenix Web (After agents)
       ACNWeb.Endpoint
-    ]
+    ] ++ llm_children
 
     opts = [strategy: :one_for_one, name: ACN.Supervisor]
     Supervisor.start_link(children, opts)
