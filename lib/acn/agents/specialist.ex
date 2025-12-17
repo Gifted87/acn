@@ -34,6 +34,20 @@ defmodule ACN.Agents.Specialist do
     {:ok, initial_state}
   end
 
+  # --- Morphic State Handlers ---
+  @impl true
+  def handle_cast({:wake}, state) do
+    Logger.info("Specialist: Waking up (Morphic State: LEAF). Ready for instructions.")
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_cast({:sleep}, state) do
+    Logger.info("Specialist: Entering Sleep Mode (Morphic State: INTERMEDIATE).")
+    # Hibernate to save memory since this agent won't be used in this node
+    {:noreply, state, :hibernate}
+  end
+
   @impl true
   def handle_cast({:execute_draft, instruction, rules, immutable_context}, _state) do
     Logger.info("Specialist received task. Entering Cognitive Loop...")
@@ -49,42 +63,7 @@ defmodule ACN.Agents.Specialist do
     start_cognitive_loop(instruction, rules, %ACN.Core.Artifacts.ImmutableContext{}, existing_worksheet)
   end
 
-  defp start_cognitive_loop(instruction, rules, immutable_context, initial_worksheet) do
-    new_context = %{
-      instruction: instruction,
-      rules: rules,
-      env: immutable_context # Storing it here
-    }
 
-    # Initialize Prompt
-    system_prompt = """
-    You are the Specialist, an expert Elixir Engineer.
-    Your goal is to implement or repair the requested code in your Virtual Worksheet (RAM).
-
-    Instruction: #{instruction}
-    Rules: #{inspect(rules)}
-    
-    Existing Codebase: #{inspect(immutable_context.codebase_map)}
-
-    You have tools to write and read files in your worksheet.
-    You must iterate until the code is correct.
-    Use 'worksheet_write' to create files.
-    When finished, call 'submit_draft'.
-    """
-
-    # Create Initial State
-    initial_buffer = ACN.AI.ContextBuffer.new(system_prompt)
-
-    # Trigger Async Loop
-    GenServer.cast(self(), {:cognitive_step, initial_buffer})
-
-    {:noreply, %SpecialistState{
-      worksheet: initial_worksheet,
-      task_context: new_context,
-      conversation_history: [],
-      turns: 0
-    }}
-  end
 
   @impl true
   def handle_cast({:cognitive_step, buffer}, state) do
@@ -93,8 +72,9 @@ defmodule ACN.Agents.Specialist do
         Router.route({:action_failure, "Cognitive Exhaustion"}, {:local, :controller})
         {:noreply, state}
      else
+        adapter = Application.get_env(:acn, :ai)[:default_adapter] || ACN.AI.Adapters.OpenAI
         config = %{
-           adapter: ACN.AI.Adapters.OpenAI,
+           adapter: adapter,
            opts: [model: "gpt-4o", temperature: 0.2] # Use smart model for coding
         }
         tools = SpecialistTools.definitions()
@@ -196,6 +176,43 @@ defmodule ACN.Agents.Specialist do
      end
   end
 
-  defp check_syntax(_, _, _, output), do: output
+   defp check_syntax(_, _, _, output), do: output
 
+  defp start_cognitive_loop(instruction, rules, immutable_context, initial_worksheet) do
+    new_context = %{
+      instruction: instruction,
+      rules: rules,
+      env: immutable_context # Storing it here
+    }
+
+    # Initialize Prompt
+    system_prompt = """
+    You are the Specialist, an expert Elixir Engineer.
+    Your goal is to implement or repair the requested code in your Virtual Worksheet (RAM).
+
+    Instruction: #{instruction}
+    Rules: #{inspect(rules)}
+    
+    Existing Codebase: #{inspect(immutable_context.codebase_map)}
+
+    You have tools to write and read files in your worksheet.
+    You must iterate until the code is correct.
+    Use 'worksheet_write' to create files.
+    When finished, call 'submit_draft'.
+    """
+
+    # Create Initial State
+    initial_buffer = ACN.AI.ContextBuffer.new(system_prompt)
+
+    # Trigger Async Loop
+    GenServer.cast(self(), {:cognitive_step, initial_buffer})
+
+    {:noreply, %SpecialistState{
+      worksheet: initial_worksheet,
+      task_context: new_context,
+      conversation_history: [],
+      turns: 0
+    }}
+  end
 end
+

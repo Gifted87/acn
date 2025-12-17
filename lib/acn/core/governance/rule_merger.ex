@@ -3,7 +3,6 @@ defmodule ACN.Core.Governance.RuleMerger do
   Mechanistically merges rules from Master, Ancestors, and Local context.
   Enforces Hierarchy: Master > Parent > Child.
   """
-  alias ACN.Core.Governance.Rule
 
   @doc """
   Merges rule lists into a definitive Policy.
@@ -39,7 +38,8 @@ defmodule ACN.Core.Governance.RuleMerger do
     case ACN.Core.ProfileLoader.load("governance_mediator", vars) do
       {:ok, profile} ->
          buffer = ACN.AI.ContextBuffer.new(profile["system_prompt"])
-         config = %{adapter: ACN.AI.Adapters.OpenAI, opts: [model: profile["model"], temperature: profile["temperature"]]}
+         adapter = Application.get_env(:acn, :ai)[:default_adapter] || ACN.AI.Adapters.OpenAI
+         config = %{adapter: adapter, opts: [model: profile["model"], temperature: profile["temperature"]]}
          
          case ACN.AI.Pipeline.run(buffer, [], config) do
            {:ok, msg, _} ->

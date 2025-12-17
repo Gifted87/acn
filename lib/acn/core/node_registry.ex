@@ -119,7 +119,7 @@ defmodule ACN.Core.NodeRegistry do
     # Logger.debug("whereis_name(#{inspect id})")
     # We ignore the atom name (:supervisor) and route purely by ID
     case lookup(id) do
-      {:ok, %{pid: pid}} ->
+      {:ok, %{pid: pid}} when is_pid(pid) ->
         if Process.alive?(pid) do
           pid
         else
@@ -136,7 +136,7 @@ defmodule ACN.Core.NodeRegistry do
       case :mnesia.read(@table, id) do
         [{table, ^id, old_pid, _addr, role, parent, created, meta}] ->
            # Check if valid PID and Alive
-           is_alive = old_pid && Process.alive?(old_pid)
+           is_alive = is_pid(old_pid) && Process.alive?(old_pid)
 
            if is_alive and old_pid != pid do
              Logger.error("CONFLICT: ID #{inspect(id)} owned by ALIVE #{inspect(old_pid)}. New: #{inspect(pid)}")

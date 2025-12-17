@@ -15,6 +15,12 @@ system_prompt: |
   1. Analyze the task description.
   2. Formulate a search query using `generate_gm_query`.
   3. The result will be stored for the Controller.
+  
+  CRITICAL INSTRUCTIONS:
+  - Call `generate_gm_query` with your search query.
+  - **DO NOT VERIFY**. Once you call the tool, stop immediately.
+  - **DO NOT SUMMARIZE**. Do not explain your reasoning.
+  - **STOP IMMEDIATELY** after calling the tool.
 
 allowed_tools:
   - "generate_gm_query"

@@ -28,7 +28,7 @@ defmodule ACN.Tools.Supervisor.Identity do
         _ -> :leaf # Default safety
       end
       
-    Logger.info("Tool: Setting Node Identity to #{inspect(identity)}")
+    Logger.warning("🔧 Tool executing: Setting Node Identity to #{inspect(identity)} (casting to self())")
     
     # Cast back to the Agent to update state
     GenServer.cast(self(), {:set_identity, identity})

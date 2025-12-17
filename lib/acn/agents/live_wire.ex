@@ -21,7 +21,7 @@ defmodule ACN.Agents.LiveWire do
     try do
       GenServer.call(via_tuple(), :get_stress)
     catch
-      :exit, _ -> 100.0 # Assume max stress if unreachable
+      :exit, _ -> 0.0 # Fail-open: No throttling if unreachable
     end
   end
 
@@ -55,6 +55,8 @@ defmodule ACN.Agents.LiveWire do
         Logger.info("LiveWire: Throttling system for #{delay}ms (Stress: High)")
         Process.sleep(delay)
       end
+    else
+        Logger.debug("LiveWire: No throttling (Stress nominal).")
     end
     :ok
   end

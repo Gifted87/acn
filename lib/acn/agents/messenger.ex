@@ -76,7 +76,8 @@ defmodule ACN.Agents.Messenger do
     case ACN.Core.ProfileLoader.load("messenger_chronicler", vars) do
       {:ok, profile} ->
         buffer = ACN.AI.ContextBuffer.new(profile["system_prompt"])
-        config = %{adapter: ACN.AI.Adapters.OpenAI, opts: [model: profile["model"], temperature: profile["temperature"]]}
+        adapter = Application.get_env(:acn, :ai)[:default_adapter] || ACN.AI.Adapters.OpenAI
+        config = %{adapter: adapter, opts: [model: profile["model"], temperature: profile["temperature"]]}
 
         summary =
           case ACN.AI.Pipeline.run(buffer, [], config) do

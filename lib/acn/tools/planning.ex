@@ -52,7 +52,7 @@ defmodule ACN.Tools.Planning do
 
       Logger.debug("Tool AddNode: Queued #{uuid}")
 
-      "Node '#{uuid}' added to plan."
+      {:ok, "Node '#{uuid}' added to plan."}
     end
   end
 
@@ -85,11 +85,18 @@ defmodule ACN.Tools.Planning do
       provider = args["provider_task_id"]
       consumer = args["consumer_task_id"]
 
-      GenServer.cast(self(), {:add_dependency, provider, consumer})
-      
-      Logger.debug("Tool LinkDependency: Queued #{provider} -> #{consumer}")
-
-      "Dependency linked: #{provider} -> #{consumer}"
+      cond do
+        is_nil(provider) or is_nil(consumer) ->
+           {:error, "Missing provider or consumer task ID."}
+        String.trim(provider) == "" or String.trim(consumer) == "" ->
+           {:error, "Provider or consumer task ID cannot be empty."}
+        provider == consumer ->
+           {:error, "Cannot link task to itself (Cycle detected)."}
+        true ->
+           GenServer.cast(self(), {:add_dependency, provider, consumer})
+           Logger.debug("Tool LinkDependency: Queued #{provider} -> #{consumer}")
+           {:ok, "Dependency linked: #{provider} -> #{consumer}"}
+      end
     end
   end
 end

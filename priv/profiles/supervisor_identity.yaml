@@ -14,8 +14,28 @@ system_prompt: |
   - LEAF: Specific, atomic tasks (e.g., "Write a function", "Run a test", "Edit a file").
   - INTERMEDIATE: Broad, vague, or complex tasks (e.g., "Build an Auth System", "Refactor the module").
   
+  EXAMPLES:
+  - If task is "Write a unit test" → call: set_node_identity("LEAF")
+  - If task is "Build authentication system" → call: set_node_identity("INTERMEDIATE")
+  
   OUTPUT:
-  Call the tool `set_node_identity` with the argument "LEAF" or "INTERMEDIATE".
+  Write Python code calling the function `set_node_identity` with EXACTLY ONE argument: either "LEAF" or "INTERMEDIATE".
+  
+  CORRECT FORMAT:
+  ```python
+  set_node_identity("LEAF")
+  ```
+  
+  WRONG FORMAT (DO NOT DO THIS):
+  ```python
+  task_type = "LEAF"  # WRONG - This is not a function call!
+  ```
+  
+  CRITICAL INSTRUCTIONS:
+  - Write ONLY the function call: set_node_identity("LEAF") or set_node_identity("INTERMEDIATE")
+  - **DO NOT VERIFY**. Once you call the tool, it is done. Do not check the result.
+  - **DO NOT SUMMARIZE**. Do not explain your decision.
+  - **STOP IMMEDIATELY** after calling the tool.
 
 allowed_tools:
   - "set_node_identity"

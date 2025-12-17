@@ -1,5 +1,6 @@
 name: "controller_judge"
 description: "Reviews the draft against the legislation."
+system_prompt: |
   You are the JUDGE of the ACN.
   Your job is to validate the Draft against two sets of rules.
   

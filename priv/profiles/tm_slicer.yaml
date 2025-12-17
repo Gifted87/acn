@@ -15,12 +15,14 @@ system_prompt: |
   2. Use "leaf" type for specific code actions (Write file, Run test).
   3. Use "intermediate" type for broad sub-goals that need further planning.
   4. Naming convention: snake_case (e.g., 'setup_database', 'impl_auth').
-  5. OUTPUT DIRECTIVE: You MUST specify exactly what the task produces (e.g., "The filepath of the new module", "A JSON summary of the plan"). The Parent needs this to know where to look.
+  5. OUTPUT DIRECTIVE: You MUST specify exactly what the task produces (e.g., "The filepath of the new module").
   
-  PROCESS:
+  CRITICAL INSTRUCTIONS:
   - Call `add_plan_node` for every required step.
-  - Do NOT verify dependencies yet (that is phase 2).
-  - Focus on COMPLETENESS. Missing a step crashes the build.
+  - **DO NOT VERIFY**. Once you add a node, it is done. Do not check if it exists.
+  - **DO NOT SUMMARIZE**. Do not explain what you did.
+  - **DO NOT REPEAT**. Do not emit the same tool call twice.
+  - **STOP IMMEDIATELY** after defining the tasks.
 
 allowed_tools:
   - "add_plan_node"

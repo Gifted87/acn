@@ -97,8 +97,26 @@ defmodule ACN.Agents.SupervisorAgent do
       {:ok, profile} ->
           Logger.info("Running Identity Determination Profile...")
           buffer = ContextBuffer.new(profile["system_prompt"])
-          config = %{adapter: ACN.AI.Adapters.OpenAI}
-          Pipeline.run(buffer, ["set_node_identity"], config)
+          adapter = Application.get_env(:acn, :ai)[:default_adapter] || ACN.AI.Adapters.OpenAI
+          config = %{adapter: adapter, stop_after_tools: true}
+          
+          case Pipeline.run(buffer, ["set_node_identity"], config) do
+            {:ok, msg, _final_buffer} ->
+              # CHECK FOR FAILURE IN CONTENT (silent tool failure detection)
+              if msg.content && String.contains?(msg.content, "Error executing tool") do
+                Logger.error("Identity determination failed silently: #{msg.content}. Using fallback.")
+                fallback = if args[:task_type] == :manager, do: :intermediate, else: :leaf
+                GenServer.cast(self(), {:set_identity, fallback})
+              else
+                Logger.info("✅ Identity tool executed. Returning from init_node handler to process :set_identity cast...")
+              end
+              
+            {:error, reason} ->
+              Logger.error("Identity Pipeline failed: #{inspect(reason)}. Using fallback.")
+              # Fallback
+              identity = if args[:task_type] == :manager, do: :intermediate, else: :leaf
+              GenServer.cast(self(), {:set_identity, identity})
+          end
           
       {:error, reason} ->
           Logger.error("Failed to load identity profile: #{inspect(reason)}. Fallback via heuristics.")
@@ -107,12 +125,14 @@ defmodule ACN.Agents.SupervisorAgent do
           GenServer.cast(self(), {:set_identity, identity})
     end
 
+    Logger.info("🚀 RETURNING from init_node handler with state. GenServer should now process queued messages...")
     {:noreply, state_with_context}
   end
 
   # Callback from Tool
   @impl true
   def handle_cast({:set_identity, identity}, state) do
+    Logger.info("🎯 RECEIVED :set_identity cast with identity=#{inspect(identity)}")
     Logger.info("Identity Confirmed: #{inspect(identity)}")
     
     state = %{state | identity: identity}
@@ -127,23 +147,7 @@ defmodule ACN.Agents.SupervisorAgent do
     {:noreply, state}
   end
   
-  defp apply_morphic_state(identity) do
-    # Wake specialized agents based on role
-    case identity do
-      :leaf ->
-        Logger.info("[Morphic] Mode: LEAF. Waking Specialist; Sleeping TaskManager.")
-        Router.route({:wake}, {:local, :specialist})
-        Router.route({:sleep}, {:local, :task_manager})
-        
-      :intermediate ->
-        Logger.info("[Morphic] Mode: INTERMEDIATE. Waking TaskManager; Sleeping Specialist.")
-        Router.route({:wake}, {:local, :task_manager})
-        Router.route({:sleep}, {:local, :specialist})
-        
-      _ ->
-        Logger.warning("[Morphic] Unknown Identity.")
-    end
-  end
+
 
   @impl true
   def handle_cast({:config_update, config}, state) do
@@ -153,7 +157,6 @@ defmodule ACN.Agents.SupervisorAgent do
      new_args = Map.merge(state.args || %{}, config)
      {:noreply, %{state | args: new_args}}
   end
-
   
   @impl true
   def handle_cast({:process_wisdom_results, task_desc}, state) do
@@ -166,7 +169,8 @@ defmodule ACN.Agents.SupervisorAgent do
        case profile_res do
          {:ok, profile} ->
            buffer = ContextBuffer.new(profile["system_prompt"])
-           config = %{adapter: ACN.AI.Adapters.OpenAI}
+           adapter = Application.get_env(:acn, :ai)[:default_adapter] || ACN.AI.Adapters.OpenAI
+           config = %{adapter: adapter, stop_after_tools: true}
            allowed_tools = profile["allowed_tools"]
            
            case Pipeline.run(buffer, allowed_tools, config) do
@@ -255,17 +259,19 @@ defmodule ACN.Agents.SupervisorAgent do
 
   @impl true
   def handle_cast({:spawn_child, task}, state) do
-    Logger.info("Supervisor received spawn request for Node: #{task.id} (#{task.description})")
-
-    # JIT GENESIS: PREVENT STALE CONTEXT
-    # We do NOT pass 'state.context' or 'worksheet' here.
-    # We only pass the POINTER to the parent (us).
+    Logger.info("SupervisorAgent: Spawning child for task #{task["name"] || task[:id]}")
     
-    output_slot = task[:merge_slot_id] || task["merge_slot_id"] || task.id
+    # Extract task metadata - handle both string and atom keys for robustness
+    _task_desc = task["description"] || task[:description] || "Unknown Task"
+    task_type = task["type"] || task[:type] || "leaf"
+    _output_directive = task["output_directive"] || task[:output_directive] || "None"
+    
+    output_slot = task[:merge_slot_id] || task["merge_slot_id"] || task["id"] || task[:id]
+    task_id = task["id"] || task[:id] || task["name"]
     
     child_args = %{
-       task: task.id, 
-       task_type: :leaf, 
+       task: task_id, 
+       task_type: task_type, 
        
        # Lattice Pointer
        parent_node: Node.self(), 
@@ -274,7 +280,7 @@ defmodule ACN.Agents.SupervisorAgent do
        
        # Minimal Task Info (for Identity Profile)
        # The rest comes from JIT fetch
-       task_desc_minimal: task.description || task["description"]
+       task_desc_minimal: task["description"] || task[:description]
     }
 
     # Execute Spawn
@@ -380,6 +386,26 @@ defmodule ACN.Agents.SupervisorAgent do
     else
       Logger.warning("Security Alert: Child #{child_id} tried to write to unauthorized slot #{slot_id}")
       {:reply, {:error, :unauthorized}, state}
+    end
+  end
+
+  # --- Private Helpers ---
+
+  defp apply_morphic_state(identity) do
+    # Wake specialized agents based on role
+    case identity do
+      :leaf ->
+        Logger.info("[Morphic] Mode: LEAF. Waking Specialist; Sleeping TaskManager.")
+        Router.route({:wake}, {:local, :specialist})
+        Router.route({:sleep}, {:local, :task_manager})
+        
+      :intermediate ->
+        Logger.info("[Morphic] Mode: INTERMEDIATE. Waking TaskManager; Sleeping Specialist.")
+        Router.route({:wake}, {:local, :task_manager})
+        Router.route({:sleep}, {:local, :specialist})
+        
+      _ ->
+        Logger.warning("[Morphic] Unknown Identity.")
     end
   end
 end

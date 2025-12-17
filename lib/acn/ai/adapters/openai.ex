@@ -17,13 +17,15 @@ defmodule ACN.AI.Adapters.OpenAI do
   @impl true
   def chat(messages, tools, opts \\ []) do
     config = config()
-    req_opts = Keyword.merge(@default_opts, opts)
+    # Separate domain options (model, temp) from Req options (receive_timeout)
+    {domain_opts, req_opts} = Keyword.split(opts, [:model, :temperature])
+    req_opts = Keyword.merge(@default_opts, req_opts)
     
     # 1. Prepare Payload
     payload = %{
-      model: config[:model],
+      model: domain_opts[:model] || config[:model],
       messages: messages,
-      temperature: req_opts[:temperature] || 0.7
+      temperature: domain_opts[:temperature] || 0.7
     }
 
     # Only attach tools if present to avoid API errors on some models

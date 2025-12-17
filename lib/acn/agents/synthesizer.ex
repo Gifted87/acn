@@ -72,7 +72,8 @@ defmodule ACN.Agents.Synthesizer do
     # 2. THINK: Run Archivist Profile
     {:ok, profile} = ACN.Core.ProfileLoader.load("synthesizer_archivist", %{artifact_content: artifact_content})
     buffer = ACN.AI.ContextBuffer.new(profile["system_prompt"])
-    config = %{adapter: ACN.AI.Adapters.OpenAI, opts: [model: profile["model"], temperature: profile["temperature"]]}
+    adapter = Application.get_env(:acn, :ai)[:default_adapter] || ACN.AI.Adapters.OpenAI
+    config = %{adapter: adapter, opts: [model: profile["model"], temperature: profile["temperature"]]}
 
     fact_text =
       case ACN.AI.Pipeline.run(buffer, [], config) do
@@ -167,7 +168,8 @@ defmodule ACN.Agents.Synthesizer do
       mission: mission
     })
     buffer = ACN.AI.ContextBuffer.new(profile["system_prompt"])
-    config = %{adapter: ACN.AI.Adapters.OpenAI, opts: [model: profile["model"], temperature: profile["temperature"]]}
+    adapter = Application.get_env(:acn, :ai)[:default_adapter] || ACN.AI.Adapters.OpenAI
+    config = %{adapter: adapter, opts: [model: profile["model"], temperature: profile["temperature"]]}
 
     aggregated_summary =
       case ACN.AI.Pipeline.run(buffer, [], config) do

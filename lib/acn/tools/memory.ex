@@ -31,8 +31,13 @@ defmodule ACN.Tools.Memory do
     end
 
     def execute(args) do
-      query = args["query_text"]
-      Logger.debug("Tool Memory: Querying ACMS for '#{query}'")
+      # Handle potential LLM parameter hallucination
+      query = args["query_text"] || args["query"]
+
+      if is_nil(query) or String.trim(query) == "" do
+        "Error: 'query_text' argument is required and cannot be empty."
+      else
+        Logger.debug("Tool Memory: Querying ACMS for '#{query}'")
 
       case MemoryClient.query(query) do
         {:ok, results} when is_list(results) ->
@@ -55,6 +60,7 @@ defmodule ACN.Tools.Memory do
            
         _ -> "Unexpected response from MemoryClient"
       end
+      end  # Close the if/else block
     end
   end
 end

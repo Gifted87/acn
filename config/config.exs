@@ -15,7 +15,7 @@ config :acn, :workspace_root, "tmp/acn_workspaces"
 # Phoenix Endpoint Configuration
 config :acn, ACNWeb.Endpoint,
   url: [host: "localhost"],
-  http: [port: 4000],
+  http: [port: 5050],
   secret_key_base: "VGhpcyBpcyBhIHNlY3JldCBrZXkgYmFzZSBmb3IgZGV2ZWxvcG1lbnQgb25seQ==",
   live_view: [signing_salt: "acn_live_salt"],
   pubsub_server: ACN.PubSub,

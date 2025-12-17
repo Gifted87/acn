@@ -21,8 +21,10 @@ defmodule ACN.AI do
          messages
        end
 
+     adapter = Application.get_env(:acn, :ai)[:default_adapter] || ACN.AI.Adapters.OpenAI
+     
      config = %{
-       adapter: ACN.AI.Adapters.OpenAI,
+       adapter: adapter,
        opts: opts
      }
 

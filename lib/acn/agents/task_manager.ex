@@ -37,7 +37,20 @@ defmodule ACN.Agents.TaskManager do
     {:ok, state}
   end
 
-  # --- Trigger: Start Planning ---
+  # --- Trigger: Start # --- Casts ---
+
+  # --- Morphic State Handlers ---
+  @impl true
+  def handle_cast({:wake}, state) do
+    Logger.info("TaskManager: Waking up (Morphic State: INTERMEDIATE). Ready to plan.")
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_cast({:sleep}, state) do
+    Logger.info("TaskManager: Entering Sleep Mode (Morphic State: LEAF).")
+    {:noreply, state, :hibernate}
+  end
 
   @impl true
   def handle_cast({:decompose, context, _rules}, state) do
@@ -54,10 +67,10 @@ defmodule ACN.Agents.TaskManager do
     }
 
     # 2. Run Slicer Logic
-    run_slicer_phase(context)
+    run_slicer_phase(context, state)
     
     # Queue transition after tools are processed
-    GenServer.cast(self(), {:next_phase, :linking})
+    # Queue transition logic handled inside run_slicer_phase
 
     {:noreply, state}
   end
@@ -86,14 +99,22 @@ defmodule ACN.Agents.TaskManager do
   # --- Phase Transitions ---
 
   @impl true
+  def handle_cast({:next_phase, :failed}, state) do
+    Logger.error("TaskManager: Critical Phase Failure. Staying in :failed state to prevent restart loop.")
+    # We do not stop the GenServer, just park it in :failed state.
+    # Intervention (God Mode) via Dashboard would be needed to reset.
+    {:noreply, %{state | phase: :failed}}
+  end
+
+  @impl true
   def handle_cast({:next_phase, :linking}, state) do
     Logger.info("TaskManager: Transitioning to Phase 2 (Linker). Node Count: #{length(state.task_id_list)}")
     
-    run_linker_phase(state.task_id_list)
+    run_linker_phase(state.task_id_list, state)
     
-    GenServer.cast(self(), {:next_phase, :validating})
-    {:noreply, %{state | phase: :linking}}
-  end
+         GenServer.cast(self(), {:next_phase, :validating})
+         {:noreply, %{state | phase: :linking}}
+      end
 
   @impl true
   def handle_cast({:next_phase, :validating}, state) do
@@ -120,10 +141,12 @@ defmodule ACN.Agents.TaskManager do
     case Graph.topsort(state.graph) do
       sorted_ids when is_list(sorted_ids) ->
         
-        # Retrieve metadata from state
+        # Retrieve metadata from state and atomize keys for struct-like access
         execution_steps = Enum.map(sorted_ids, fn id ->
            meta = Map.get(state.node_metadata, id, %{})
-           Map.merge(meta, %{id: id})
+           # Convert string keys to atoms so Controller can use task.id notation
+           atomized_meta = atomize_keys(meta)
+           Map.put(atomized_meta, :id, id)
         end)
         
         # PARALLEL BATCHING: Group tasks by DAG layers
@@ -149,30 +172,67 @@ defmodule ACN.Agents.TaskManager do
 
   # --- Internal Logic ---
 
-  defp run_slicer_phase(context) do
-    intent = context["description"] || "Unknown Task"
+  defp run_slicer_phase(context, _parent_state) do
+    intent = 
+      get_in(context, ["task_assignment", "description"]) ||
+      context["description"] ||
+      "Unknown Task"
     
     case ProfileLoader.load("tm_slicer", %{intent: intent}) do
       {:ok, profile} ->
         buffer = ContextBuffer.new(profile["system_prompt"])
-        config = %{adapter: ACN.AI.Adapters.OpenAI} 
+        adapter = Application.get_env(:acn, :ai)[:default_adapter] || ACN.AI.Adapters.OpenAI
+        config = %{adapter: adapter, stop_after_tools: true}
         allowed_tools = profile["allowed_tools"]
         
-        Logger.debug("Running Slicer Pipeline...")
-        Pipeline.run(buffer, allowed_tools, config)
+        # --- FIX START ---
+        case Pipeline.run(buffer, allowed_tools, config) do
+           {:ok, _, _} ->
+              Logger.info("Slicer phase completed.")
+              # Small delay to allow async tool cast messages to be processed
+              Process.sleep(100)
+              GenServer.cast(self(), {:next_phase, :linking})
+              
+           {:error, :max_turns_exceeded} ->
+              # Small models get chatty and hit max_turns even after successfully calling tools
+              # Check if any tasks were actually added before failing
+              Process.sleep(100)  # Let pending tool casts complete
+              
+              current_state = :sys.get_state(self())
+              task_count = length(current_state.task_id_list)
+              
+              if task_count > 0 do
+                Logger.warning("Slicer hit max_turns but #{task_count} tasks were added. Proceeding.")
+                GenServer.cast(self(), {:next_phase, :linking})
+              else
+                Logger.error("Slicer hit max_turns with no tasks added. Failing.")
+                GenServer.cast(self(), {:next_phase, :failed})
+              end
+              
+           {:error, reason} ->
+              Logger.error("Slicer AI Failed: #{inspect(reason)}")
+              GenServer.cast(self(), {:next_phase, :failed})
+        end
+        # --- FIX END ---
         
       {:error, reason} ->
         Logger.error("Failed to load Slicer profile: #{inspect(reason)}")
     end
   end
   
-  defp run_linker_phase(node_ids) do
-    node_list_str = Enum.join(node_ids, ", ")
+  defp run_linker_phase(node_ids, state) do
+    # Format tasks as single line to avoid YAML indentation conflicts
+    node_list_str = 
+      Enum.map_join(node_ids, " | ", fn id ->
+        meta = Map.get(state.node_metadata, id, %{})
+        "#{id} (#{meta["type"]}) - #{meta["description"]} -> Produces: #{meta["output_directive"]}"
+      end)
     
     case ProfileLoader.load("tm_linker", %{node_list: node_list_str}) do
       {:ok, profile} ->
         buffer = ContextBuffer.new(profile["system_prompt"])
-        config = %{adapter: ACN.AI.Adapters.OpenAI}
+        adapter = Application.get_env(:acn, :ai)[:default_adapter] || ACN.AI.Adapters.OpenAI
+        config = %{adapter: adapter, stop_after_tools: true}
         allowed_tools = profile["allowed_tools"]
         
         Logger.debug("Running Linker Pipeline...")
@@ -248,6 +308,31 @@ defmodule ACN.Agents.TaskManager do
       build_batches(graph, task_map, new_in_degrees, [batch | batches])
     end
   end
+  
+  # Helper: Convert string keys to atoms to enable dot notation access
+  defp atomize_keys(map) when is_map(map) do
+    Map.new(map, fn
+      {k, v} when is_binary(k) -> {String.to_existing_atom(k), v}
+      {k, v} -> {k, v}  # Keep atom keys as-is
+    end)
+  rescue
+    ArgumentError ->
+      # If atom doesn't exist, use safe conversion
+      Map.new(map, fn
+        {k, v} when is_binary(k) -> 
+          # Only atomize known safe keys
+          safe_key = case k do
+            "id" -> :id
+            "description" -> :description
+            "type" -> :type
+            "output_directive" -> :output_directive
+            "name" -> :name
+            _ -> k  # Keep as string if unknown
+          end
+          {safe_key, v}
+        {k, v} -> {k, v}
+      end)
+  end
 
-  defp run_scheduler(), do: :ok  # Stub
+
 end

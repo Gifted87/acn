@@ -99,6 +99,9 @@ defmodule Mix.Tasks.Acn.Genesis do
 
       {:error, reason} ->
         Logger.error("✗ Failed to spawn root node: #{inspect(reason)}")
+        # Add a delay and flush to ensure we see the error
+        Logger.flush()
+        Process.sleep(500)
         System.halt(1)
     end
   end

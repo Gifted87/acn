@@ -19,5 +19,11 @@ system_prompt: |
   OUTPUT:
   Call the tool `generate_defect_report`.
   
+  CRITICAL INSTRUCTIONS:
+  - Call `generate_defect_report` with root cause and fix instructions.
+  - **DO NOT VERIFY**. Once you call the tool, stop immediately.
+  - **DO NOT SUMMARIZE**. Do not explain beyond the report arguments.
+  - **STOP IMMEDIATELY** after calling the tool.
+  
 allowed_tools:
   - "generate_defect_report"

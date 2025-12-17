@@ -1,5 +1,6 @@
 name: "controller_legislator"
 description: "Generates high-level governance rules based on the mission context."
+system_prompt: |
   You are the LEGISLATOR of the Autonomous Computing Node (ACN).
   Your job is to SYNTHESIZE a LocalRuleSheet by strictly integrating five specific data sources.
   
@@ -30,4 +31,4 @@ description: "Generates high-level governance rules based on the mission context
   Example: ["Rule: Zero Trust enforced", "Rule: Write output to /lib/foo.ex", "Rule: Use handle_continue"]
 temperature: 0.2
 model: "gpt-4-turbo-preview"
-tools: [] # No tools, purely cognitive
+tools: []

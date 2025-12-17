@@ -17,8 +17,12 @@ defmodule ACN.Core.ProfileLoader do
         raw_yaml = File.read!(path)
 
         # 2. Evaluate EEx (Safety: binding vars)
-        # We explicitly bind variables as bindings (local variables)
-        bindings = Enum.map(vars, fn {k, v} -> {String.to_atom(to_string(k)), v} end)
+        # Convert vars to atom keys for bindings
+        atom_vars = Map.new(vars, fn {k, v} -> {String.to_atom(to_string(k)), v} end)
+        
+        # We bind variables as locals AND as 'assigns' to support @var syntax
+        bindings = Map.to_list(atom_vars) ++ [assigns: atom_vars]
+        
         rendered_yaml = EEx.eval_string(raw_yaml, bindings)
 
         # 3. Parse YAML

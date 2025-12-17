@@ -168,7 +168,10 @@ defmodule ACN.Agents.Controller do
 
     # Initialize Buffer
     buffer = ACN.AI.ContextBuffer.new(profile["system_prompt"])
-    config = %{adapter: ACN.AI.Adapters.OpenAI, opts: [model: profile["model"], temperature: profile["temperature"]]}
+    
+    # Use Global Default Adapter (Ollama or TinyAgent) unless overridden
+    adapter = Application.get_env(:acn, :ai)[:default_adapter] || ACN.AI.Adapters.OpenAI
+    config = %{adapter: adapter, opts: [model: profile["model"], temperature: profile["temperature"]]}
 
     Logger.info("Controller entering Legislation Phase (AI Powered)...")
 
@@ -201,7 +204,8 @@ defmodule ACN.Agents.Controller do
     {:ok, profile} = ACN.Core.ProfileLoader.load("controller_leaf_architect", vars)
 
     buffer = ACN.AI.ContextBuffer.new(profile["system_prompt"])
-    config = %{adapter: ACN.AI.Adapters.OpenAI, opts: [model: profile["model"], temperature: profile["temperature"]]}
+    adapter = Application.get_env(:acn, :ai)[:default_adapter] || ACN.AI.Adapters.OpenAI
+    config = %{adapter: adapter, opts: [model: profile["model"], temperature: profile["temperature"]]}
 
     Logger.info("Controller entering Architecture Phase (AI Powered)...")
 
@@ -247,7 +251,8 @@ defmodule ACN.Agents.Controller do
     {:ok, profile} = ACN.Core.ProfileLoader.load("controller_judge", vars)
 
     buffer = ACN.AI.ContextBuffer.new(profile["system_prompt"])
-    config = %{adapter: ACN.AI.Adapters.OpenAI, opts: [model: profile["model"], temperature: profile["temperature"]]}
+    adapter = Application.get_env(:acn, :ai)[:default_adapter] || ACN.AI.Adapters.OpenAI
+    config = %{adapter: adapter, opts: [model: profile["model"], temperature: profile["temperature"]]}
 
     verdict_raw =
        case ACN.AI.Pipeline.run(buffer, [], config) do
@@ -300,7 +305,8 @@ defmodule ACN.Agents.Controller do
      {:ok, profile} = ACN.Core.ProfileLoader.load("controller_security_officer", vars)
 
      buffer = ACN.AI.ContextBuffer.new(profile["system_prompt"])
-     config = %{adapter: ACN.AI.Adapters.OpenAI, opts: [model: profile["model"], temperature: profile["temperature"]]}
+     adapter = Application.get_env(:acn, :ai)[:default_adapter] || ACN.AI.Adapters.OpenAI
+     config = %{adapter: adapter, opts: [model: profile["model"], temperature: profile["temperature"]]}
 
      auth_decision =
        case ACN.AI.Pipeline.run(buffer, [], config) do
@@ -417,12 +423,13 @@ defmodule ACN.Agents.Controller do
        vars = %{
          failure_type: failure_type,
          retry_count: state.validation_retry_count,
-         report: report
+      report: report
        }
        
        {:ok, profile} = ACN.Core.ProfileLoader.load("controller_strategist", vars)
        buffer = ACN.AI.ContextBuffer.new(profile["system_prompt"])
-       config = %{adapter: ACN.AI.Adapters.OpenAI, opts: [model: profile["model"], temperature: profile["temperature"]]}
+      adapter = Application.get_env(:acn, :ai)[:default_adapter] || ACN.AI.Adapters.OpenAI
+      config = %{adapter: adapter, opts: [model: profile["model"], temperature: profile["temperature"]]}
 
        # Run Strategist Analysis
        strategy = 
@@ -497,19 +504,27 @@ defmodule ACN.Agents.Controller do
   def handle_cast({:internal_transition, :start_intermediate_legislation}, state) do
     # Load Intermediate Legislator Profile
     gov_data = state.context[:governance_data] || state.context["governance_data"] || %{}
+    
+    # Fallback extraction for description
+    task_desc = 
+      gov_data[:task_description] || 
+      gov_data["task_description"] ||
+      get_in(state.context, ["task_assignment", "description"]) ||
+      "Unknown"
 
     vars = %{
        context: state.context,
-       master_rules: gov_data[:master_rules] || [],
-       ancestral_rules: gov_data[:ancestral_rules] || [],
-       task_description: gov_data[:task_description] || "Unknown",
-       output_directive: gov_data[:output_directive] || "None"
+       master_rules: gov_data[:master_rules] || gov_data["master_rules"] || [],
+       ancestral_rules: gov_data[:ancestral_rules] || gov_data["ancestral_rules"] || [],
+       task_description: task_desc,
+       output_directive: gov_data[:output_directive] || gov_data["output_directive"] || "None"
     }
 
     {:ok, profile} = ACN.Core.ProfileLoader.load("controller_legislator_intermediate", vars)
 
     buffer = ACN.AI.ContextBuffer.new(profile["system_prompt"])
-    config = %{adapter: ACN.AI.Adapters.OpenAI, opts: [model: profile["model"], temperature: profile["temperature"]]}
+    adapter = Application.get_env(:acn, :ai)[:default_adapter] || ACN.AI.Adapters.OpenAI
+    config = %{adapter: adapter, opts: [model: profile["model"], temperature: profile["temperature"]]}
 
     rules =
       case ACN.AI.Pipeline.run(buffer, [], config) do
@@ -604,14 +619,14 @@ defmodule ACN.Agents.Controller do
   def handle_cast({:internal_transition, :start_sre_prep}, state) do
     Logger.info("Preparing Subtree Infrastructure...")
 
-    # Mint Token for mkdir
-    {:ok, token, _} = TokenAuthority.mint_token(state.private_key, :fs_write, "/tmp/acn_workspace/.keep")
+    # Mint Token for mkdir (use relative path to avoid traversal rejection)
+    {:ok, token, _} = TokenAuthority.mint_token(state.private_key, :fs_write, ".keep")
 
     # Dispatch Actuator
     # We pretend this creates the necessary folders for the child nodes
     payload = %{
        tool: :fs_write,
-       args: %{path: "/tmp/acn_workspace/.keep", content: ""},
+       args: %{path: ".keep", content: ""},
        token: token
      }
     Router.route({:perform_action, payload}, {:local, :actuator})

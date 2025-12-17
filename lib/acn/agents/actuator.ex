@@ -172,10 +172,12 @@ defmodule ACN.Agents.Actuator do
 
   defp handle_fs_write(payload, state) do
     # Assume node_id is provided in args or default to "root"
-    node_id = payload.args[:node_id] || payload.args["node_id"] || "root"
-    path = payload.args.path || payload.args["path"]
-    content = payload.args.content || payload.args["content"]
-    mode = payload.args.mode || payload.args["mode"] || "overwrite"
+    args = payload.args
+    node_id = args["node_id"] || Map.get(args, :node_id, "root")
+    path = args["path"] || Map.get(args, :path)
+    content = args["content"] || Map.get(args, :content)
+    # Use safe access to avoid KeyError if key is missing
+    mode = args["mode"] || Map.get(args, :mode, "overwrite")
 
     result = 
       case mode do
@@ -242,9 +244,9 @@ defmodule ACN.Agents.Actuator do
       # Determine required scope based on tool
       required_scope =
         case payload.tool do
-          :fs_write -> :actuator
-          :exec_cmd -> :actuator
-          :fs_read -> :validator 
+          :fs_write -> :fs_write
+          :exec_cmd -> :exec_cmd
+          :fs_read -> :fs_read
           :hardware_gpio -> :actuator
           _ -> :unknown
         end

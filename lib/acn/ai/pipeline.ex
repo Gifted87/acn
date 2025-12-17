@@ -39,7 +39,9 @@ defmodule ACN.AI.Pipeline do
     opts = config[:opts] || []
 
     # 2.5 Check Homeostasis (Throttle)
+    IO.puts("DEBUG: Pipeline calling LiveWire...")
     ACN.Agents.LiveWire.wait_for_homeostasis()
+    IO.puts("DEBUG: Pipeline calling Adapter...")
 
     # 3. Call AI
     messages = ContextBuffer.to_list(buffer)
@@ -87,8 +89,15 @@ defmodule ACN.AI.Pipeline do
     # Append Tool Outputs to history
     buffer_with_results = ContextBuffer.add_messages(buffer_with_call, tool_results)
 
-    # Recurse (The "Loop")
-    do_run(buffer_with_results, modules, defs, config, turns + 1)
+    # Check if we should stop after tool execution (for planning agents)
+    if config[:stop_after_tools] do
+      # Return immediately without recursing - tools were executed successfully
+      final_msg = %{role: "assistant", content: "Tools executed successfully."}
+      {:ok, final_msg, buffer_with_results}
+    else
+      # Recurse (The "Loop")
+      do_run(buffer_with_results, modules, defs, config, turns + 1)
+    end
   end
 
   defp execute_tool(%{"function" => func, "id" => call_id}, modules) do
@@ -108,9 +117,14 @@ defmodule ACN.AI.Pipeline do
       if module do
         case Jason.decode(args_json) do
           {:ok, args} ->
-            case module.execute(args) do
-              {:ok, result} -> result
-              {:error, reason} -> "Error: #{reason}"
+            try do
+              case module.execute(args) do
+                {:ok, result} -> result
+                {:error, reason} -> "Error: #{reason}"
+                other -> other # Robustness: Handle tool returning raw string/map
+              end
+            rescue
+              e -> "Error executing tool: #{inspect(e)}"
             end
           {:error, _} -> "Error: Invalid JSON arguments"
         end

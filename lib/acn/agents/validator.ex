@@ -201,7 +201,8 @@ defmodule ACN.Agents.Validator do
     {:ok, profile} = ACN.Core.ProfileLoader.load("validator_result_analyst", vars)
 
     buffer = ACN.AI.ContextBuffer.new(profile["system_prompt"])
-    config = %{adapter: ACN.AI.Adapters.OpenAI, opts: [model: profile["model"], temperature: profile["temperature"]]}
+    adapter = Application.get_env(:acn, :ai)[:default_adapter] || ACN.AI.Adapters.OpenAI
+    config = %{adapter: adapter, opts: [model: profile["model"], temperature: profile["temperature"]]}
 
     verdict_data =
        case ACN.AI.Pipeline.run(buffer, [], config) do
@@ -243,7 +244,8 @@ defmodule ACN.Agents.Validator do
      {:ok, profile} = ACN.Core.ProfileLoader.load("validator_static", vars)
      
      buffer = ACN.AI.ContextBuffer.new(profile["system_prompt"])
-     config = %{adapter: ACN.AI.Adapters.OpenAI, opts: [model: profile["model"], temperature: 0.1]}
+     adapter = Application.get_env(:acn, :ai)[:default_adapter] || ACN.AI.Adapters.OpenAI
+     config = %{adapter: adapter, opts: [model: profile["model"], temperature: 0.1], stop_after_tools: true}
      allowed_tools = profile["allowed_tools"]
      
      # This is Async in a real agent loop, but here we block for simplicity of the refactor
@@ -287,7 +289,8 @@ defmodule ACN.Agents.Validator do
     {:ok, profile} = ACN.Core.ProfileLoader.load("validator_test_pilot", vars)
 
     buffer = ACN.AI.ContextBuffer.new(profile["system_prompt"])
-    config = %{adapter: ACN.AI.Adapters.OpenAI, opts: [model: profile["model"], temperature: profile["temperature"]]}
+    adapter = Application.get_env(:acn, :ai)[:default_adapter] || ACN.AI.Adapters.OpenAI
+    config = %{adapter: adapter, opts: [model: profile["model"], temperature: profile["temperature"]]}
 
     command =
        case ACN.AI.Pipeline.run(buffer, [], config) do
@@ -315,47 +318,37 @@ defmodule ACN.Agents.Validator do
     case ACN.Core.ProfileLoader.load("validator_coroner", vars) do
       {:ok, profile} ->
         buffer = ACN.AI.ContextBuffer.new(profile["system_prompt"])
-        config = %{adapter: ACN.AI.Adapters.OpenAI, opts: [model: profile["model"], temperature: profile["temperature"]]}
+        adapter = Application.get_env(:acn, :ai)[:default_adapter] || ACN.AI.Adapters.OpenAI
+        config = %{adapter: adapter, opts: [model: profile["model"], temperature: profile["temperature"]], stop_after_tools: true}
         allowed_tools = profile["allowed_tools"]
 
         # 2. Run Pipeline
         case ACN.AI.Pipeline.run(buffer, allowed_tools, config) do
           {:ok, msg, _final_buffer} ->
              # 3. Extract Report from Tool Call
-             # The Pipeline wraps tool outputs in message history, but usually returns the final assistant message.
-             # If the assistant called the tool, we need to find the tool logic in the pipeline or parse the message.
-             # Implementation Detail: ACN.AI.Pipeline.run returns the FINAL assistant message. 
-             # If the Coroner correctly called `generate_defect_report`, the tool execution would have happened inside Pipeline.
-             # The tool returns a JSON string (as per Step 2 above).
-             # We need to look at the message history to find the tool output? 
-             # OR simpler: The tool output is usually fed back to the LLM. 
-             # BUT `DefectReporting.execute` returns the JSON. 
-             # The pipeline implementation provided in codebase returns `{:ok, final_msg, buffer}`.
-             # If the tool terminated the loop, the `content` of the final message might be the tool result if we configured it that way, 
-             # OR we look into `buffer` for the `role: "tool"` message.
+             # We prioritize the arguments sent TO the tool (the report itself)
+             # rather than the result OF the tool (which might be just "ok")
              
-             # Let's look for the Tool Message in the buffer history:
-             tool_msg = 
+             tool_call = 
                Enum.find(msg.tool_calls || [], fn call -> 
                  call["function"]["name"] == "generate_defect_report"
                end)
              
-             # Wait, `msg` is the assistant's request to call the tool. 
-             # The `ACN.AI.Pipeline` executes it and appends the result to buffer.
-             # We need to grab the result from the buffer.
-             
-             last_tool_msg = 
-               Enum.find(ACN.AI.ContextBuffer.to_list(_final_buffer), fn m -> 
-                 m.role == "tool" # Find the last one?
-               end)
-               
              report = 
-               if last_tool_msg do
-                 case Jason.decode(last_tool_msg.content) do
-                   {:ok, decoded} -> decoded
-                   _ -> %{reason: "Coroner output malformed", raw: last_tool_msg.content}
+               if tool_call do
+                 args = tool_call["function"]["arguments"]
+                 case args do
+                   %{} -> args
+                   binary when is_binary(binary) ->
+                      case Jason.decode(binary) do
+                        {:ok, decoded} -> decoded
+                        _ -> %{reason: "Coroner arguments malformed", raw: binary}
+                      end
+                   _ -> %{reason: "Unknown argument format"}
                  end
                else
+                 # Fallback: Check buffer if tool call missing from msg?
+                 # Unlikely if the LLM followed instructions.
                  %{reason: "Coroner failed to call reporting tool"}
                end
 

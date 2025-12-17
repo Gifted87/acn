@@ -20,6 +20,12 @@ system_prompt: |
   OUTPUT:
   Call `report_static_status`. If you find ANY violations, status is 'DIRTY'. Provide a list of specific issues.
   If the code is safe and follows rules, status is 'CLEAN'.
+  
+  CRITICAL INSTRUCTIONS:
+  - Call `report_static_status` with status and issues list.
+  - **DO NOT VERIFY**. Once you call the tool, stop immediately.
+  - **DO NOT SUMMARIZE**. Do not explain your analysis.
+  - **STOP IMMEDIATELY** after calling the tool.
 
 allowed_tools:
   - "report_static_status"

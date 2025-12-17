@@ -44,15 +44,15 @@ defmodule ACN.Infrastructure.MemoryClient do
 
     request_body = %{
       "fact_text" => dbc.fact_text,
-      "agent_id" => dbc.author_id,
+      "agent_id" => "root",
       "description_payloads" => payloads,
       # Default ACLs: Public read, Author write
-      "acls" => %{"read" => ["public"], "write" => [dbc.author_id]},
       "provenance" => Map.merge(dbc.provenance_data || %{}, %{
         "verifier_id" => dbc.verifier_id,
         "artifact_hash" => dbc.artifact_hash,
         "origin_timestamp" => DateTime.to_iso8601(dbc.timestamp)
-      })
+      }),
+      "acls" => ["public"]
     }
 
     # 2. Send to CMS
@@ -80,7 +80,15 @@ defmodule ACN.Infrastructure.MemoryClient do
   
   The CMS handles the vectorization of the query text.
   """
-  def query(query_text, limit \\ 5) do
+  def query(query_text, limit \\ 5)
+
+  # Guard against empty queries to prevent 400 Bad Request
+  def query(query_text, _limit) when is_nil(query_text) or query_text == "" do
+    Logger.warning("MemoryClient: Aborting query with empty text.")
+    {:ok, []}
+  end
+
+  def query(query_text, limit) do
     conf = config()
     url = "#{conf[:base_url]}/api/v1/query"
 
