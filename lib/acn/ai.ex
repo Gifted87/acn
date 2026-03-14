@@ -21,7 +21,7 @@ defmodule ACN.AI do
          messages
        end
 
-     adapter = Application.get_env(:acn, :ai)[:default_adapter] || ACN.AI.Adapters.OpenAI
+     adapter = Application.get_env(:acn, :ai)[:default_adapter] || ACN.AI.Adapters.OllamaAdapter
      
      config = %{
        adapter: adapter,
@@ -29,7 +29,7 @@ defmodule ACN.AI do
      }
 
      case Pipeline.run(buffer, tools, config) do
-       {:ok, msg, _updated_buffer} ->
+       {:ok, msg, _updated_buffer, _env} ->
           {:ok, msg.content}
        error ->
           error

@@ -16,38 +16,38 @@ defmodule ACN.Application do
 
     children = [
       # Infrastructure (Must start first)
+      {Finch, name: ACN.HTTPClient, pools: %{:default => [size: 200, count: 1]}},
       ACN.Infrastructure.ClusterManager,
       ACN.Infrastructure.StateBackup,
       ACN.Infrastructure.NetworkMonitor,
+      ACN.Infrastructure.ACMSLimiter,
+      ACN.Core.AuditBuffer,
 
       # Core Registry & Monitors (Before agents)
       NodeRegistry.child_spec(),
+      ACN.Core.LatticeRegistry,
       ACN.Core.NodeMonitor,
       ACN.Core.NodeSupervisor,
 
       # Phoenix PubSub (BEFORE agents that subscribe to it)
       {Phoenix.PubSub, name: ACN.PubSub},
 
-      # Core Agents (After PubSub)
-      ACN.Agents.LiveWire,
-      ACN.Agents.Messenger,
-      ACN.Agents.Controller,
-      ACN.Agents.Specialist,
-      ACN.Agents.Validator,
-      ACN.Agents.Synthesizer,
-      ACN.Agents.TaskManager,
-      {ACN.Agents.Actuator, [public_key: nil]},
-      ACN.Agents.SupervisorAgent,
+      # HSG Observability Layer
+      ACN.Observability.Schema,
+      ACN.Observability.Panopticon,
+
+      # Root Supervisor (Responsible for starting the root enclave)
+      # REMOVED: Genesis now dynamically spawns the root node via NodeSupervisor.
+      # {ACN.Agents.SupervisorAgent, [node_id: "root"]},
 
       # AI Services
-      ACN.AI.Embedder.Serving,
       {Task.Supervisor, name: ACN.AI.TaskSupervisor},
 
       # Phoenix Web (After agents)
       ACNWeb.Endpoint
-    ] ++ llm_children
+    ] ++ llm_children ++ (if Application.get_env(:acn, :enable_embeddings, false), do: [ACN.AI.Embedder.Serving], else: [])
 
-    opts = [strategy: :one_for_one, name: ACN.Supervisor]
+    opts = [strategy: :one_for_one, name: ACN.Supervisor, max_restarts: 10, max_seconds: 60]
     Supervisor.start_link(children, opts)
   end
 end

@@ -7,11 +7,12 @@ defmodule ACN.AI.ModelBehavior do
   defmodule Response do
     @type t :: %__MODULE__{
       content: String.t() | nil,
+      thinking: String.t() | nil,
       tool_calls: list(map()) | nil,
       token_usage: map() | nil,
       finish_reason: String.t() | nil
     }
-    defstruct [:content, :tool_calls, :token_usage, :finish_reason]
+    defstruct [:content, :thinking, :tool_calls, :token_usage, :finish_reason]
   end
 
   @type message :: %{
@@ -40,7 +41,7 @@ defmodule ACN.AI.ModelBehavior do
               {:ok, Response.t()} | {:error, any()}
 
   @doc """
-  Generates vector embeddings for a given text.
+  Generates cognitive embeddings for a given text.
   
   Args:
   - text: The input string.

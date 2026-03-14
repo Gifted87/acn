@@ -9,7 +9,7 @@ defmodule ACN.AI.ContextBuffer do
     defstruct [:system_prompt, :message_history, :max_context_size, :safety_margin]
   end
 
-  @default_max_context 128_000 # GPT-4-Turbo
+  @default_max_context 128_000 # Large Context Window
   @default_safety_margin 4_096 # Reserve output space
 
   def new(system_prompt, opts \\ []) do

@@ -5,7 +5,6 @@ defmodule ACN.Infrastructure.NetworkMonitor do
   """
   use GenServer
   require Logger
-  alias ACN.Core.NodeRegistry
 
   def start_link(_opts) do
     GenServer.start_link(__MODULE__, [], name: __MODULE__)

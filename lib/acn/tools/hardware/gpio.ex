@@ -17,5 +17,5 @@ defmodule ACN.Tools.Hardware.GPIO do
   end
 
   # Safe Pin List logic should also check here or in Actuator
-  def execute(_args), do: {:error, :use_actuator_directly}
+  def execute(_args, _env), do: {:error, :use_actuator_directly}
 end

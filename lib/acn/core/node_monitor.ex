@@ -45,7 +45,16 @@ defmodule ACN.Core.NodeMonitor do
         # Directive says "remove or tag... as Dead".
         # Let's delete to keep table clean for now.
         transaction = fn ->
-          :mnesia.delete({@registry_table, node_id})
+          # SAFE PRUNE: Only delete if the registry still points to THIS dead pid.
+          # If it points to a new PID (restart), do NOT delete.
+          case :mnesia.read(@registry_table, node_id) do
+            [{_tab, ^node_id, ^pid, _addr, _role, _parent, _ts, _meta}] ->
+               :mnesia.delete({@registry_table, node_id})
+            
+            _ -> 
+               # Entry mismatch (already updated to new PID) or already gone.
+               :ok
+          end
         end
         :mnesia.transaction(transaction)
 

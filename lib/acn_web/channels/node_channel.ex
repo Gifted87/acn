@@ -15,7 +15,7 @@ defmodule ACNWeb.NodeChannel do
     case ACN.Core.ProfileLoader.load("messenger_dispatcher", vars) do
       {:ok, profile} ->
         buffer = ACN.AI.ContextBuffer.new(profile["system_prompt"])
-        adapter = Application.get_env(:acn, :ai)[:default_adapter] || ACN.AI.Adapters.OpenAI
+        adapter = Application.get_env(:acn, :ai)[:default_adapter] || ACN.AI.Adapters.OllamaAdapter
         config = %{adapter: adapter, opts: [model: profile["model"], temperature: profile["temperature"]]}
 
         triage_result =

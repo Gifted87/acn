@@ -12,15 +12,15 @@ defmodule ACN.Agents.Actuator.Sandbox do
   2. Run Command
   3. Teardown
   """
-  def run(command, args) do
+  def run(command, args, opts \\ []) do
     if Application.get_env(:acn, :simulation_mode, false) do
-      run_simulation(command, args)
+      run_simulation(command, args, opts)
     else
-      run_firecracker(command, args)
+      run_firecracker(command, args, opts)
     end
   end
 
-  defp run_firecracker(command, args) do
+  defp run_firecracker(command, args, _opts) do
     # 1. Prepare Infrastructure
     uuid = UUID.uuid4()
     socket_path = "/tmp/acn_#{uuid}.socket"
@@ -55,18 +55,38 @@ defmodule ACN.Agents.Actuator.Sandbox do
     end
   end
 
-  defp run_simulation(command, args) do
+  defp run_simulation(command, args, opts) do
     Logger.warning("Sandbox: RUNNING LOCAL (Simulation Mode). Command: #{command}")
     
     # Concrete Implementation: Run on Host System
     # Security Warning: This runs with the same permissions as the BEAM node.
-    case System.cmd(command, args, stderr_to_stdout: false) do
+    do_run_simulation(command, args, opts)
+  end
+  
+  defp do_run_simulation(command, args, opts) do
+    full_command = if args == [], do: command, else: command <> " " <> Enum.join(args, " ")
+    
+    spawn_opts = 
+      if opts[:cd] do
+        [cd: opts[:cd], stderr_to_stdout: false]
+      else
+        [stderr_to_stdout: false]
+      end
+
+    case System.shell(full_command, spawn_opts) do
       {output, 0} -> 
         %{stdout: output, stderr: "", exit_code: 0}
       {output, code} -> 
         %{stdout: "", stderr: output, exit_code: code}
     end
   rescue
+    e in ErlangError ->
+      if e.original == :enoent and command == "python" do
+        Logger.info("Sandbox: 'python' not found, falling back to 'python3'...")
+        do_run_simulation("python3", args, opts)
+      else
+        %{stdout: "", stderr: "Local Execution Failed: #{inspect(e)}", exit_code: -1}
+      end
     e -> 
        %{stdout: "", stderr: "Local Execution Failed: #{inspect(e)}", exit_code: -1}
   end

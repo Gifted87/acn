@@ -30,5 +30,5 @@ defmodule ACN.Tools.ToolBehaviour do
   - {:ok, result_string} : Successful execution output (to be fed back to LLM).
   - {:error, reason_string} : Failure message (to be fed back to LLM).
   """
-  @callback execute(args :: map()) :: {:ok, String.t()} | {:error, String.t()}
+  @callback execute(args :: map(), env :: map()) :: {:ok, String.t()} | {:error, String.t()}
 end

@@ -11,11 +11,27 @@ defmodule ACN.Tools.Registry do
     "read_file" => ACN.Tools.FileSystem.Read,
     "add_plan_node" => ACN.Tools.Planning.AddNode,
     "link_dependency" => ACN.Tools.Planning.LinkDependency,
-    "generate_gm_query" => ACN.Tools.Memory.GenerateQuery,
-    "report_static_status" => ACN.Tools.Validation.Static,
     "upstream_merge" => ACN.Tools.Lattice.UpstreamMerge,
-    "generate_defect_report" => ACN.Tools.Validation.DefectReporting,
-    "set_node_identity" => ACN.Tools.Supervisor.Identity
+    "submit_fact" => ACN.Tools.Lattice.SubmitFact,
+    
+    # Memory Tools
+    "query_wisdom" => ACN.Tools.Memory.QueryWisdom,
+    # "ingest_fact" => ACN.Tools.Memory.IngestFact,
+    "set_node_identity" => ACN.Tools.Supervisor.Identity,
+    "submit_legislation" => ACN.Tools.Governance.SubmitLegislation,
+    "submit_verdict" => ACN.Tools.Governance.SubmitVerdict,
+    "submit_mediation" => ACN.Tools.Governance.SubmitMediation,
+    "submit_execution_plan" => ACN.Tools.Planning.SubmitExecutionPlan,
+
+    "dispatch_intent" => ACN.Tools.Communication.DispatchIntent,
+    "submit_blueprint" => ACN.Tools.Governance.SubmitBlueprint,
+
+    "write_to_file" => ACN.Tools.FileSystem.Write,
+    "touch" => ACN.Tools.FileSystem.Touch,
+    "mkdir" => ACN.Tools.FileSystem.Mkdir,
+    "submit_plan" => ACN.Tools.Planning.SubmitPlan,
+    "submit_chronicle" => ACN.Tools.Communication.SubmitChronicle,
+    "submit_strategy" => ACN.Tools.Strategy.SubmitStrategy
   }
 
   @doc """

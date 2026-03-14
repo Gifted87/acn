@@ -2,6 +2,7 @@ defmodule ACNWeb.DashboardSocket do
   use Phoenix.Socket
 
   channel "acn:node:*", ACNWeb.NodeChannel
+  channel "acn:panopticon", ACNWeb.PanopticonChannel
 
   @impl true
   def connect(_params, socket, _connect_info) do

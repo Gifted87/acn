@@ -5,58 +5,66 @@ defmodule ACN.Infrastructure.MemoryClient do
   This module acts as the bridge between the ACN (Agent/Client) and the 
   CMS (Brain/Server). It communicates exclusively via the CMS REST API.
   
-  Unlike previous versions, this client performs NO local embedding generation.
-  It offloads semantic indexing, storage, and Hebbian association to the CMS.
+  It is critical for the Supervisor's 'Wisdom' phase during Node Genesis.
   """
   require Logger
   alias ACN.Core.Artifacts.DBC
 
-  # Default to localhost:4000 if not configured, but ideally set via env var CMS_URL
+  # Default configuration with safety fallbacks
   defp config do
     config = Application.get_env(:acn, :memory, [])
     base_url = config[:cms_url] || "http://localhost:4000"
-    api_key = config[:cms_api_key] # Optional, for future auth
+    api_key = config[:cms_api_key]
 
-    [base_url: base_url, headers: build_headers(api_key)]
+    [
+      base_url: base_url, 
+      headers: build_headers(api_key),
+      # Critical: Prevent Node Genesis from hanging if ACMS is down
+      receive_timeout: 10000, 
+      connect_options: [timeout: 5000]
+    ]
   end
 
-  defp build_headers(nil), do: [{"content-type", "application/json"}]
-  defp build_headers(key), do: [{"content-type", "application/json"}, {"x-agent-key", key}]
+  defp build_headers(nil), do: [{"content-type", "application/json"}, {"x-agent-id", "root"}]
+  defp build_headers(_key), do: [{"content-type", "application/json"}, {"x-agent-id", "root"}]
 
   @doc """
   Ingests a Digital Birth Certificate (DBC) into the remote CMS.
-  
-  Maps the ACN's `DBC` struct to the CMS's expected Ingestion JSON schema.
   """
   def ingest(%DBC{} = dbc) do
     conf = config()
     url = "#{conf[:base_url]}/api/v1/ingest"
 
-    # 1. Map DBC to CMS Payload (defined in CMS.Web / FIDValidator)
-    # We treat the fact_text as the primary Text payload. 
-    # If the DBC has specific cost metrics or provenance, we attach them as metadata.
-    payloads = [
-      %{"type" => "text", "content" => dbc.fact_text}
-    ]
+    # Map DBC to CMS Payload
+    payloads = [%{"type" => "text", "content" => dbc.fact_text}]
+    payloads = 
+      if dbc.source_code && dbc.source_code != "" do
+        payloads ++ [%{"type" => "code", "content" => dbc.source_code}]
+      else
+        payloads
+      end
     
-    # Add Code payload if it looks like code (simple heuristic or extend DBC to support it)
-    # For now, we stick to the text fact.
-
     request_body = %{
       "fact_text" => dbc.fact_text,
-      "agent_id" => "root",
+      "agent_id" => "root", 
       "description_payloads" => payloads,
-      # Default ACLs: Public read, Author write
       "provenance" => Map.merge(dbc.provenance_data || %{}, %{
         "verifier_id" => dbc.verifier_id,
         "artifact_hash" => dbc.artifact_hash,
-        "origin_timestamp" => DateTime.to_iso8601(dbc.timestamp)
+        "origin_timestamp" => DateTime.to_iso8601(dbc.timestamp),
+        "full_path" => dbc.full_path,
+        "filename" => dbc.filename
       }),
-      "acls" => ["public"]
+      "acls" => %{
+        "read" => ["public", "root", "system"],
+        "write" => ["root", "system"]
+      }
     }
 
-    # 2. Send to CMS
-    case Req.post(url, json: request_body, headers: conf[:headers]) do
+    # Merge config options for timeout
+    req_options = Keyword.drop(conf, [:base_url, :headers])
+    
+    case Req.post(url, [json: request_body, headers: conf[:headers]] ++ req_options) do
       {:ok, %Req.Response{status: 201, body: %{"node_id" => id}}} ->
         Logger.info("CMS Ingest Success. Node ID: #{id}")
         {:ok, id}
@@ -77,67 +85,67 @@ defmodule ACN.Infrastructure.MemoryClient do
 
   @doc """
   Performs a semantic search against the remote CMS.
-  
-  The CMS handles the vectorization of the query text.
+  Used by SupervisorAgent to fetch 'Wisdom' before Identity Determination.
   """
   def query(query_text, limit \\ 5)
 
-  # Guard against empty queries to prevent 400 Bad Request
   def query(query_text, _limit) when is_nil(query_text) or query_text == "" do
     Logger.warning("MemoryClient: Aborting query with empty text.")
     {:ok, []}
   end
 
   def query(query_text, limit) do
+    # Use the Limiter to serialize and rate-limit queries
+    ACN.Infrastructure.ACMSLimiter.query(query_text, limit)
+  end
+
+  @doc """
+  Internal execution of the query. Should generally be called via query/2 (Limiter).
+  """
+  def execute_query(query_text, limit) do
     conf = config()
     url = "#{conf[:base_url]}/api/v1/query"
 
     request_body = %{
       "query_text" => query_text,
       "max_results" => limit,
-      "min_relevance" => 0.6, # Default confidence threshold
-      "agent_id" => "acn_client" # Ideally passed in from caller
+      "min_relevance" => 0.6,
+      "agent_id" => "root",
+      "embedding_model" => "all-MiniLM-L6-v2",
+      "reasoning_mode" => "normal",
+      "system_mode" => "normal"
     }
 
-    case Req.post(url, json: request_body, headers: conf[:headers]) do
+    req_options = Keyword.drop(conf, [:base_url, :headers])
+
+    case Req.post(url, [json: request_body, headers: conf[:headers]] ++ req_options) do
       {:ok, %Req.Response{status: 200, body: %{"results" => results}}} ->
-        # Normalize results to a simple list of maps for the Agent
-        normalized = Enum.map(results, fn r ->
-          %{
-            fact_text: r["fact"],
-            score: r["score"],
-            node_id: r["node_id"],
-            metadata: r["metadata"]
-          }
-        end)
-        {:ok, normalized}
+        # Return raw results to preserve full context (Wisdom)
+        {:ok, results}
 
       {:ok, %Req.Response{status: status}} ->
         Logger.warning("CMS Query Failed with Status: #{status}")
         {:error, :query_failed}
 
       {:error, reason} ->
-        Logger.error("CMS Query Network Error: #{inspect(reason)}")
-        {:error, :network_failure}
+        # Silent failure preferred during Genesis to allow fallback heuristics
+        Logger.warning("CMS Query Network Error: #{inspect(reason)}. Proceeding without wisdom.")
+        {:ok, []} 
     end
   end
 
   @doc """
   Checks connectivity to the remote CMS.
-  Replaces the old 'init_collection' logic since the CMS manages its own state.
   """
   def check_connection do
     conf = config()
-    # Using the embedder health check as a proxy for system health
     url = "#{conf[:base_url]}/api/v1/health/embedder"
 
-    case Req.get(url, headers: conf[:headers]) do
-      {:ok, %Req.Response{status: 200}} ->
-        Logger.info("Remote CMS is Online and Healthy.")
-        :ok
-      _ ->
-        Logger.warning("Remote CMS is Unreachable or Unhealthy.")
-        {:error, :cms_offline}
+    req_options = Keyword.drop(conf, [:base_url, :headers])
+
+    case Req.get(url, [headers: conf[:headers]] ++ req_options) do
+      {:ok, %Req.Response{status: 200}} -> :ok
+      _ -> {:error, :cms_offline}
     end
   end
 end

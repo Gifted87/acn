@@ -18,20 +18,30 @@ config :acn, :hardware_adapter,
 # CONFIG MANDATE: Fail Fast if Keys are Missing
 if config_env() != :test do
   config :acn, :ai,
-    default_adapter: ACN.AI.Adapters.OllamaAdapter,
+    default_adapter: ACN.AI.Adapters.GeminiAdapter,
     local_llm: [
       repo_id: "driaforall/Tiny-Agent-a-1.5B"
     ],
     ollama: [
       base_url: System.get_env("OLLAMA_BASE_URL", "http://localhost:11434"),
-      model: System.get_env("OLLAMA_MODEL", "driaforall/tiny-agent-a:1.5b")
+      model: System.get_env("OLLAMA_MODEL", "qwen3:0.6b")
     ],
     openai: [
-      api_key: System.get_env("OPENAI_API_KEY"),
-      base_url: System.get_env("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-      model: System.get_env("OPENAI_MODEL", "gpt-4-turbo-preview"),
+      api_key: System.get_env("DASHSCOPE_API_KEY"),
+      base_url: System.get_env("OPENAI_BASE_URL", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"),
+      model: System.get_env("OPENAI_MODEL", "qwen-flash"),
+      # Safety: Hard timeout for the request itself (increased to match Ollama)
+      request_timeout: 300_000,
+      # Retry Configuration
+      retry_max_attempts: 3,
+      retry_base_delay: 1000
+    ],
+    gemini: [
+      api_key: System.get_env("GEMINI_API_KEY"),
+      model: System.get_env("GEMINI_MODEL", "gemini-2.5-flash-lite"),
+      enable_thinking: true,
       # Safety: Hard timeout for the request itself
-      request_timeout: 60_000,
+      request_timeout: 300_000,
       # Retry Configuration
       retry_max_attempts: 3,
       retry_base_delay: 1000
@@ -42,9 +52,10 @@ if config_env() != :test do
 
   config :acn, :cluster,
     seed_nodes: System.get_env("SEED_NODES", "") |> String.split(",", trim: true) |> Enum.map(&String.to_atom/1)
+  # Memory Configuration (ACMS Backend)
   config :acn, :memory,
-    qdrant_url: System.get_env("QDRANT_URL", "http://localhost:6333"),
-    qdrant_key: System.get_env("QDRANT_API_KEY")
+    cms_url: System.get_env("CMS_URL", "http://localhost:4000"),
+    cms_api_key: System.get_env("CMS_API_KEY")
 
   # AI Compilation Target
   config :nx, :default_backend, EXLA.Backend

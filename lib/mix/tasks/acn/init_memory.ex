@@ -2,18 +2,18 @@ defmodule Mix.Tasks.Acn.InitMemory do
   use Mix.Task
   require Logger
 
-  @shortdoc "Initializes the ACMS Qdrant Collection"
+  @shortdoc "Initializes connection to ACMS"
 
   def run(_) do
     Mix.Task.run("app.start")
-    Logger.info("Initializing ACMS Memory...")
+    Logger.info("Checking ACMS connection...")
 
-    case ACN.Infrastructure.MemoryClient.init_collection() do
+    case ACN.Infrastructure.MemoryClient.check_connection() do
       :ok ->
-        Logger.info("Memory Initialization Complete.")
+        IO.puts("✓ ACMS is online and healthy")
       {:error, reason} ->
-        Logger.error("Memory Initialization Failed: #{inspect(reason)}")
-        exit({:shutdown, 1})
+        IO.puts("✗ ACMS connection failed: #{inspect reason}")
+        IO.puts("  Make sure ACMS is running at http://localhost:4000")
     end
   end
 end

@@ -7,7 +7,7 @@ defmodule ACN.Core.NodeSupervisor do
   end
 
   def init(_init_arg) do
-    DynamicSupervisor.init(strategy: :one_for_one)
+    DynamicSupervisor.init(strategy: :one_for_one, max_restarts: 10, max_seconds: 60)
   end
 
   def start_child_node(args) do
@@ -39,23 +39,23 @@ defmodule ACN.Core.NodeSupervisor do
     # args[:task] is usually an ID string "task_1"
     
     # We verify args has what we need, at least an ID
-    if is_nil(args[:task]), do: raise "Cannot spawn child without :task ID"
+    if is_nil(args[:task]) and is_nil(args[:id]), do: raise "Cannot spawn child without :task or :id"
 
-    # 1. Register Metadata in Mnesia (Distributed Source of Truth)
-    # The register logic is valid regardless of who calls it, but usually done by Parent?
-    # Actually, NodeRegistry.register_node writes to Mnesia. Mnesia is shared/replicated.
-    # So it doesn't matter *where* we write it, as long as write succeeds.
-    # Ideally, we write it *before* spawn to reserve the ID.
+    # Support new ID key
+    id = args[:task] || args[:id]
+    parent_id = args[:parent_node] || args[:parent] # generic support
     
-    id = args[:task]
-    parent_id = args[:parent_node]
-    role = if args[:task_type] == :manager, do: :intermediate, else: :leaf
-    
-    ACN.Core.NodeRegistry.register_node(id, nil, role, parent_id)
+    # Legacy Registration (Only if not using LatticeRegistry self-registration?)
+    # For now, we leave this for backward compatibility for old agents, 
+    # but new agents register themselves in init().
+    if args[:legacy_register] do
+      role = if args[:task_type] == :manager, do: :intermediate, else: :leaf
+      ACN.Core.NodeRegistry.register_node(id, nil, role, parent_id)
+    end
 
     # 2. Spawn Child
-    # Let's assume we pass the WHOLE args map as the argument to start_link
-    spec = {ACN.Agents.SupervisorAgent, args}
+    child_module = args[:child_module] || ACN.Agents.SupervisorAgent
+    spec = {child_module, args}
     
     DynamicSupervisor.start_child(__MODULE__, spec)
   end

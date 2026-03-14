@@ -13,6 +13,10 @@ defmodule ACN.Tools.Supervisor.Identity do
              "type" => "string",
              "enum" => ["LEAF", "INTERMEDIATE"],
              "description" => "The determined identity based on task complexity."
+          },
+          "path" => %{
+             "type" => "string",
+             "description" => "Optional: The absolute path for the node's workspace (used primarily by root nodes)."
           }
         },
         "required" => ["identity"]
@@ -20,7 +24,10 @@ defmodule ACN.Tools.Supervisor.Identity do
     }
   end
 
-  def execute(%{"identity" => identity_str}) do
+  def execute(params, _env) do
+    identity_str = params["identity"]
+    path = params["path"]
+
     identity = 
       case String.upcase(identity_str) do
         "LEAF" -> :leaf
@@ -28,10 +35,10 @@ defmodule ACN.Tools.Supervisor.Identity do
         _ -> :leaf # Default safety
       end
       
-    Logger.warning("🔧 Tool executing: Setting Node Identity to #{inspect(identity)} (casting to self())")
+    Logger.warning("🔧 Tool executing: Setting Node Identity to #{inspect(identity)} (path: #{inspect(path)})")
     
     # Cast back to the Agent to update state
-    GenServer.cast(self(), {:set_identity, identity})
+    GenServer.cast(self(), {:set_identity, identity, path})
     
     {:ok, "Identity set to #{identity_str}. Proceeding to Morphic State transition."}
   end

@@ -1,43 +1,55 @@
 defmodule ACN.Agents.TaskManager do
-  use GenServer
+  @moduledoc """
+  The TaskManager agent orchestrates the decomposition of high-level tasks into batched sub-tasks.
+  In Intermediate Nodes, it uses a single AI bot (tm_planner) to generate a Directed Acyclic Graph (DAG)
+  represented as sequential batches of parallel tasks.
+  """
+  use GenServer, restart: :transient
   require Logger
   alias ACN.Core.NodeRegistry
   alias ACN.Core.ProfileLoader
   alias ACN.AI.Pipeline
   alias ACN.AI.ContextBuffer
+  alias ACN.Router
+  alias ACN.Core.Utils.ID
+  alias ACN.Observability.Panopticon
 
   # --- Public API ---
 
-
-  def start_link(_opts \\ []) do
-    GenServer.start_link(__MODULE__, [], name: via_tuple())
+  def start_link(opts \\ []) do
+    node_id = opts[:node_id] || "root"
+    GenServer.start_link(__MODULE__, opts, name: via_tuple(node_id))
   end
 
-  defp via_tuple do
-    NodeRegistry.via_tuple(:task_manager, :task_manager)
+  defp via_tuple(node_id) do
+    NodeRegistry.via_tuple(:task_manager, "#{node_id}_task_manager")
   end
 
   # --- Server Callbacks ---
 
   defmodule State do
-    defstruct [:graph, :phase, :context_snapshot, :task_id_list, :plan_id, :node_metadata]
+    defstruct [
+      :phase,
+      :router
+    ]
   end
 
   @impl true
-  def init(_) do
-    # Initialize a new directed graph
-    graph = Graph.new(type: :directed)
+  def init(opts) do
+    node_id = opts[:node_id] || "root"
+    router_state = %Router.State{
+      agent_role: :task_manager,
+      node_id: node_id,
+      local_directory: Router.discover_local_agents(node_id)
+    }
+
     state = %State{
-      graph: graph,
       phase: :idle,
-      task_id_list: [],  # Cache for Linker
-      plan_id: nil,
-      node_metadata: %{}
+      router: router_state
     }
     {:ok, state}
   end
 
-  # --- Trigger: Start # --- Casts ---
 
   # --- Morphic State Handlers ---
   @impl true
@@ -53,286 +65,215 @@ defmodule ACN.Agents.TaskManager do
   end
 
   @impl true
-  def handle_cast({:decompose, context, _rules}, state) do
-    Logger.info("TaskManager: Received Decomposition Request. Starting Phase 1 (Slicer).")
-    
-    # 1. Update State
-    state = %{state | 
-      phase: :slicing, 
-      context_snapshot: context,
-      # Clear previous graph if reusing?
-      graph: Graph.new(type: :directed),
-      task_id_list: [],
-      node_metadata: %{}
-    }
-
-    # 2. Run Slicer Logic
-    run_slicer_phase(context, state)
-    
-    # Queue transition after tools are processed
-    # Queue transition logic handled inside run_slicer_phase
-
+  def handle_cast({:set_local_identity, _identity}, state) do
     {:noreply, state}
   end
 
-  # --- Tool Actions (Processed from Mailbox) ---
-
   @impl true
-  def handle_cast({:add_node, uuid, metadata}, state) do
-    Logger.debug("TaskManager: Adding Node #{uuid}")
-    
-    new_graph = Graph.add_vertex(state.graph, uuid)
-    new_list = [uuid | state.task_id_list]
-    new_meta = Map.put(state.node_metadata || %{}, uuid, metadata)
-    
-    {:noreply, %{state | graph: new_graph, task_id_list: new_list, node_metadata: new_meta}}
+  def handle_cast({:routed_message, _sender, payload}, state) do
+    GenServer.cast(self(), payload)
+    {:noreply, state}
   end
 
+  # --- Simplified Single-Bot Planning ---
+  
   @impl true
-  def handle_cast({:add_dependency, provider, consumer}, state) do
-    Logger.debug("TaskManager: Linking #{provider} -> #{consumer}")
+  def handle_cast({:receive_implementation_package, package}, state) do
+    Logger.info("TaskManager: Received Implementation Package. Generating Single-Bot Plan...")
     
-    new_graph = Graph.add_edge(state.graph, provider, consumer)
-    {:noreply, %{state | graph: new_graph}}
-  end
-
-  # --- Phase Transitions ---
-
-  @impl true
-  def handle_cast({:next_phase, :failed}, state) do
-    Logger.error("TaskManager: Critical Phase Failure. Staying in :failed state to prevent restart loop.")
-    # We do not stop the GenServer, just park it in :failed state.
-    # Intervention (God Mode) via Dashboard would be needed to reset.
-    {:noreply, %{state | phase: :failed}}
-  end
-
-  @impl true
-  def handle_cast({:next_phase, :linking}, state) do
-    Logger.info("TaskManager: Transitioning to Phase 2 (Linker). Node Count: #{length(state.task_id_list)}")
+    # 1. Prepare Variables for Profile
+    task_desc = package.task_description
+    rules = package.rules || []
+    rules_text = (if is_list(rules), do: Enum.join(rules, "\n"), else: rules)
     
-    run_linker_phase(state.task_id_list, state)
+    vars = %{
+      task_description: task_desc,
+      rules: rules_text,
+      context: package.full_context,
+      deep_context: package.full_context,
+      blueprint_spec: package[:blueprint_spec] || package["blueprint_spec"] || "No blueprint available."
+    }
     
-         GenServer.cast(self(), {:next_phase, :validating})
-         {:noreply, %{state | phase: :linking}}
-      end
-
-  @impl true
-  def handle_cast({:next_phase, :validating}, state) do
-    Logger.info("TaskManager: Transitioning to Phase 3 (Validator).")
-    
-    case validate_graph(state.graph) do
-      :ok ->
-        Logger.info("TaskManager: Graph Validated. Proceeding to Scheduler.")
-        GenServer.cast(self(), {:next_phase, :scheduling})
-        {:noreply, %{state | phase: :validating}}
-        
-      {:error, reason} ->
-        Logger.error("TaskManager: Planning Failed Validation: #{inspect(reason)}")
-        # Failure recovery? For now, halt.
-        {:noreply, %{state | phase: :failed}}
-    end
-  end
-
-  @impl true
-  def handle_cast({:next_phase, :scheduling}, state) do
-    Logger.info("TaskManager: Transitioning to Phase 4 (Scheduler).")
-    
-    # Topological Sort
-    case Graph.topsort(state.graph) do
-      sorted_ids when is_list(sorted_ids) ->
-        
-        # Retrieve metadata from state and atomize keys for struct-like access
-        execution_steps = Enum.map(sorted_ids, fn id ->
-           meta = Map.get(state.node_metadata, id, %{})
-           # Convert string keys to atoms so Controller can use task.id notation
-           atomized_meta = atomize_keys(meta)
-           Map.put(atomized_meta, :id, id)
-        end)
-        
-        # PARALLEL BATCHING: Group tasks by DAG layers
-        # Tasks with no dependencies go in batch 1
-        # Tasks that only depend on batch 1 go in batch 2, etc.
-        batches = compute_parallel_batches(state.graph, execution_steps)
-        
-        plan = %{
-          batches: batches,
-          graph_export: Graph.to_edgelist(state.graph)
-        }
-        
-        Logger.info("TaskManager: Plan Ready. Batches: #{length(batches)}. Dispatching to Controller.")
-        ACN.Core.Router.route({:plan_ready, plan}, {:local, :controller})
-        
-        {:noreply, %{state | phase: :scheduled}}
-        
-      false -> # Cycle detected
-        Logger.error("TaskManager: Cycle detected during sort!")
-        {:noreply, %{state | phase: :failed}}
-    end
-  end
-
-  # --- Internal Logic ---
-
-  defp run_slicer_phase(context, _parent_state) do
-    intent = 
-      get_in(context, ["task_assignment", "description"]) ||
-      context["description"] ||
-      "Unknown Task"
-    
-    case ProfileLoader.load("tm_slicer", %{intent: intent}) do
+     # 2. Load Profile
+    case ProfileLoader.load("tm_planner", vars) do
       {:ok, profile} ->
-        buffer = ContextBuffer.new(profile["system_prompt"])
-        adapter = Application.get_env(:acn, :ai)[:default_adapter] || ACN.AI.Adapters.OpenAI
-        config = %{adapter: adapter, stop_after_tools: true}
-        allowed_tools = profile["allowed_tools"]
-        
-        # --- FIX START ---
-        case Pipeline.run(buffer, allowed_tools, config) do
-           {:ok, _, _} ->
-              Logger.info("Slicer phase completed.")
-              # Small delay to allow async tool cast messages to be processed
-              Process.sleep(100)
-              GenServer.cast(self(), {:next_phase, :linking})
-              
-           {:error, :max_turns_exceeded} ->
-              # Small models get chatty and hit max_turns even after successfully calling tools
-              # Check if any tasks were actually added before failing
-              Process.sleep(100)  # Let pending tool casts complete
-              
-              current_state = :sys.get_state(self())
-              task_count = length(current_state.task_id_list)
-              
-              if task_count > 0 do
-                Logger.warning("Slicer hit max_turns but #{task_count} tasks were added. Proceeding.")
-                GenServer.cast(self(), {:next_phase, :linking})
-              else
-                Logger.error("Slicer hit max_turns with no tasks added. Failing.")
-                GenServer.cast(self(), {:next_phase, :failed})
-              end
-              
-           {:error, reason} ->
-              Logger.error("Slicer AI Failed: #{inspect(reason)}")
-              GenServer.cast(self(), {:next_phase, :failed})
-        end
-        # --- FIX END ---
+        run_planner_with_retry(profile, package, state, 5)
         
       {:error, reason} ->
-        Logger.error("Failed to load Slicer profile: #{inspect(reason)}")
+         Logger.error("TaskManager: Failed to load tm_planner profile: #{inspect(reason)}")
     end
-  end
-  
-  defp run_linker_phase(node_ids, state) do
-    # Format tasks as single line to avoid YAML indentation conflicts
-    node_list_str = 
-      Enum.map_join(node_ids, " | ", fn id ->
-        meta = Map.get(state.node_metadata, id, %{})
-        "#{id} (#{meta["type"]}) - #{meta["description"]} -> Produces: #{meta["output_directive"]}"
-      end)
-    
-    case ProfileLoader.load("tm_linker", %{node_list: node_list_str}) do
-      {:ok, profile} ->
-        buffer = ContextBuffer.new(profile["system_prompt"])
-        adapter = Application.get_env(:acn, :ai)[:default_adapter] || ACN.AI.Adapters.OpenAI
-        config = %{adapter: adapter, stop_after_tools: true}
-        allowed_tools = profile["allowed_tools"]
-        
-        Logger.debug("Running Linker Pipeline...")
-        Pipeline.run(buffer, allowed_tools, config)
-        
-      {:error, reason} ->
-        Logger.error("Failed to load Linker profile: #{inspect(reason)}")
-    end
-  end
-  
-  defp validate_graph(graph) do
-    if Graph.is_acyclic?(graph) do
-      :ok
-    else
-      {:error, :cycle_detected}
-    end
+    {:noreply, state}
   end
 
-  # Compute parallel batches based on DAG topology
-  # Returns [[batch1_tasks], [batch2_tasks], ...]
-  defp compute_parallel_batches(graph, execution_steps) do
-    # Build a map of task_id -> task_metadata
-    task_map = Map.new(execution_steps, fn step -> {step.id, step} end)
+  defp run_planner_with_retry(profile, package, state, attempts_left) do
+    buffer = ContextBuffer.new(profile["system_prompt"])
+    adapter = Application.get_env(:acn, :ai)[:default_adapter] || ACN.AI.Adapters.OllamaAdapter
+    config = %{adapter: adapter, opts: [model: profile["model"], temperature: profile["temperature"], tool_choice: "ANY"]}
     
-    # Compute in-degrees for all tasks
-    in_degrees = 
-      Enum.reduce(execution_steps, %{}, fn step, acc ->
-        # Count incoming edges
-        in_degree = Graph.in_degree(graph, step.id)
-        Map.put(acc, step.id, in_degree)
-      end)
+    Logger.info("TaskManager: Running Planner (Attempts left: #{attempts_left})...")
     
-    # Iteratively build batches
-    build_batches(graph, task_map, in_degrees, [])
-  end
-  
-  defp build_batches(_graph, _task_map, in_degrees, batches) when map_size(in_degrees) == 0 do
-    Enum.reverse(batches)
-  end
-  
-  defp build_batches(graph, task_map, in_degrees, batches) do
-    # Find all tasks with in_degree == 0 (no dependencies)
-    ready_ids = 
-      in_degrees
-      |> Enum.filter(fn {_id, degree} -> degree == 0 end)
-      |> Enum.map(fn {id, _} -> id end)
-    
-    if ready_ids == [] do
-      # Cycle detected or error - fallback to remaining tasks in single batch
-      remaining_tasks = 
-        in_degrees
-        |> Map.keys()
-        |> Enum.map(fn id -> Map.get(task_map, id) end)
-      Enum.reverse([remaining_tasks | batches])
-    else
-      # Create batch from ready tasks
-      batch = Enum.map(ready_ids, fn id -> Map.get(task_map, id) end)
-      
-      # Remove these tasks from in_degrees
-      new_in_degrees = Map.drop(in_degrees, ready_ids)
-      
-      # Decrement in-degrees for tasks that depended on completed tasks
-      new_in_degrees = 
-        Enum.reduce(ready_ids, new_in_degrees, fn completed_id, acc ->
-          # Get all tasks that depend on this completed task
-          dependents = Graph.out_neighbors(graph, completed_id)
-          
-          Enum.reduce(dependents, acc, fn dep_id, acc2 ->
-            Map.update(acc2, dep_id, 0, fn deg -> max(0, deg - 1) end)
+    case Pipeline.run(buffer, ["submit_plan"], config) do
+      {:ok, msg, _, _} ->
+          # CRITICAL VALIDATION: Check if bot actually called the tool
+          tool_calls = Map.get(msg, :tool_calls) || []
+          has_submit_plan_call = Enum.any?(tool_calls, fn tc ->
+            get_in(tc, ["function", "name"]) == "submit_plan"
           end)
-        end)
-      
-      build_batches(graph, task_map, new_in_degrees, [batch | batches])
+          
+          if !has_submit_plan_call do
+             if attempts_left > 1 do
+                Logger.warning("TaskManager: Planner did NOT call submit_plan tool. Retrying with feedback...")
+                # Inject feedback into task description
+                feedback = "\n\n[CRITICAL SYSTEM ERROR]: You FAILED to call the submit_plan tool in your previous attempt. You MUST call the submit_plan tool with the batches array. DO NOT just describe the plan in text - you MUST use the tool!"
+                updated_task = (package.task_description || "") <> feedback
+                updated_package = Map.put(package, :task_description, updated_task)
+                
+                # Reconstruct vars for profile reload
+                rules = updated_package.rules || []
+                rules_text = (if is_list(rules), do: Enum.join(rules, "\n"), else: rules)
+                updated_vars = %{
+                  task_description: updated_task,
+                  rules: rules_text,
+                  context: updated_package.full_context,
+                  deep_context: updated_package.full_context,
+                  blueprint_spec: updated_package[:blueprint_spec] || updated_package["blueprint_spec"] || "No blueprint available."
+                }
+                
+                {:ok, updated_profile} = ProfileLoader.load("tm_planner", updated_vars)
+                run_planner_with_retry(updated_profile, updated_package, state, attempts_left - 1)
+             else
+                Logger.error("TaskManager: Planner did not call submit_plan tool after retries.")
+                report_plan_failure("Bot Failed to Call submit_plan Tool (Exhausted Retries)", package, state.router)
+             end
+          else
+             # Fix 4A: Pass working_path dynamically so extract_batches can validate
+             msg_with_context = Map.put(msg, :working_path, package.working_path)
+             batches = extract_batches(msg_with_context)
+             
+             if batches == [] do
+                if attempts_left > 1 do
+                   Logger.warning("TaskManager: Planner returned empty plan. Retrying...")
+                   run_planner_with_retry(profile, package, state, attempts_left - 1)
+                else
+                   Logger.error("TaskManager: Planner returned empty plan after retries.")
+                   report_plan_failure("Empty Plan / Parsing Error (Exhausted Retries)", package, state.router)
+                end
+             else
+                # 4. Return Plan to Controller IMMEDIATELY
+                plan = %{
+                  batches: batches,
+                  working_path: package.working_path,
+                  parent_node_id: package.parent_node_id,
+                 # Pass Blueprint back to Controller
+                 blueprint_spec: package[:blueprint_spec] || package["blueprint_spec"]
+               }
+
+               # HSG: Inject intent into the Panopticon right before delivering the plan
+               Enum.with_index(batches, fn batch, index ->
+                 Panopticon.inject_intent(package.parent_node_id, index, batch)
+               end)
+
+               Logger.info("TaskManager: Plan Generated (#{length(batches)} batches). Sending to Controller.")
+               Router.route({:plan_ready, plan}, {:local, :controller}, state.router)
+             end
+          end
+
+      error ->
+         if attempts_left > 1 do
+            Logger.warning("TaskManager: Planner AI Failed. Retrying... Error: #{inspect(error)}")
+            run_planner_with_retry(profile, package, state, attempts_left - 1)
+         else
+            Logger.error("TaskManager: Planner AI Failed after retries: #{inspect(error)}")
+            report_plan_failure("AI Pipeline Error: #{inspect(error)}", package, state.router)
+         end
     end
   end
-  
-  # Helper: Convert string keys to atoms to enable dot notation access
-  defp atomize_keys(map) when is_map(map) do
-    Map.new(map, fn
-      {k, v} when is_binary(k) -> {String.to_existing_atom(k), v}
-      {k, v} -> {k, v}  # Keep atom keys as-is
-    end)
-  rescue
-    ArgumentError ->
-      # If atom doesn't exist, use safe conversion
-      Map.new(map, fn
-        {k, v} when is_binary(k) -> 
-          # Only atomize known safe keys
-          safe_key = case k do
-            "id" -> :id
-            "description" -> :description
-            "type" -> :type
-            "output_directive" -> :output_directive
-            "name" -> :name
-            _ -> k  # Keep as string if unknown
+        
+
+
+  defp extract_batches(msg) do
+     # 1. Try Tool Call (Primary Protocol)
+     tool_call_result = 
+       case Map.get(msg, :tool_calls) do
+         [tr | _] -> 
+           case tr do
+             %{"function" => %{"name" => "submit_plan", "arguments" => args_json}} ->
+                # REPAIR: Fix common model typo where array is closed with '}' followed by '['
+                # e.g., [... }, [ ...
+                fixed_json = String.replace(args_json, ~r/}\s*,\s*\[/, "], [")
+                case Jason.decode(fixed_json) do
+                  {:ok, %{"batches" => b}} when is_list(b) -> 
+                    if validate_task_paths(b, msg[:working_path]), do: {:ok, normalize_ids(b)}, else: :error
+                  {:ok, list} when is_list(list) -> 
+                    if validate_task_paths(list, msg[:working_path]), do: {:ok, normalize_ids(list)}, else: :error
+                  _ -> :error
+                end
+             _ -> :error
+           end
+         _ -> :error
+       end
+
+     case tool_call_result do
+       {:ok, batches} -> batches
+       :error ->
+          # 2. Fallback: Parse raw content
+          clean_content = 
+            msg.content
+            |> to_string()
+            |> String.replace(~r/^```json\s*/, "") 
+            |> String.replace(~r/\s*```$/, "")
+            |> String.trim()
+            # REPAIR here too
+            |> String.replace(~r/}\s*,\s*\[/, "], [")
+
+          case Jason.decode(clean_content) do
+            {:ok, %{"batches" => b}} when is_list(b) -> 
+              if validate_task_paths(b, msg[:working_path]), do: normalize_ids(b), else: []
+            {:ok, list} when is_list(list) -> 
+              if validate_task_paths(list, msg[:working_path]), do: normalize_ids(list), else: []
+            _ -> 
+               Logger.warning("TaskManager: Failed to parse plan from both Tool and Content.")
+               Logger.debug("Raw Content: #{String.slice(msg.content || "", 0, 500)}")
+               []
           end
-          {safe_key, v}
-        {k, v} -> {k, v}
-      end)
+     end
   end
 
+  defp validate_task_paths(batches, working_path) when is_list(batches) do
+    Enum.all?(batches, fn
+      batch when is_list(batch) -> Enum.all?(batch, &has_valid_path?(&1, working_path))
+      task when is_map(task) -> has_valid_path?(task, working_path)
+      _ -> false 
+    end)
+  end
 
+  defp has_valid_path?(task, working_path) do
+    path = task["path"] || task[:path]
+    # Fix 4A: Spatial containment check. Ensure the generated path is strictly within the parent's working directory.
+    # We allow the path to exactly equal working_path, or be a subdirectory, but not completely disjoint.
+    root = working_path || "/"
+    is_binary(path) && String.length(path) > 1 && (String.starts_with?(path, "/") or String.starts_with?(path, "~")) && String.starts_with?(path, root)
+  end
+
+  defp report_plan_failure(reason, _package, router) do
+      # Notify Controller of failure so it doesn't hang
+      Router.route({:plan_failure, reason}, {:local, :controller}, router)
+  end
+
+  defp normalize_ids(batches) when is_list(batches) do
+    Enum.map(batches, fn
+      batch when is_list(batch) -> Enum.map(batch, &normalize_task_id/1)
+      task when is_map(task) -> normalize_task_id(task)
+      other -> other
+    end)
+  end
+
+  defp normalize_task_id(task) when is_map(task) do
+    id = task[:id] || task["id"]
+    if id do
+      Map.put(task, :id, ID.normalize(id))
+    else
+      task
+    end
+  end
 end

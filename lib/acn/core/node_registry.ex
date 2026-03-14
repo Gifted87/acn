@@ -72,6 +72,25 @@ defmodule ACN.Core.NodeRegistry do
     end
   end
 
+  @doc """
+  Updates the parent_id for an existing node.
+  """
+  def update_parent(id, parent_id) do
+    transaction = fn ->
+      case :mnesia.read(@table, id) do
+        [{table, ^id, pid, node, role, _old_parent, created, meta}] ->
+          :mnesia.write({table, id, pid, node, role, parent_id, created, meta})
+        [] ->
+          :mnesia.abort(:not_found)
+      end
+    end
+
+    case :mnesia.transaction(transaction) do
+      {:atomic, :ok} -> :ok
+      err -> err
+    end
+  end
+
   # --- Data Access ---
 
   @doc """
@@ -97,7 +116,7 @@ defmodule ACN.Core.NodeRegistry do
 
       [] -> {:error, :not_found}
     end
-    # Logger.debug("NodeRegistry.lookup(#{inspect id}) -> #{inspect result}")
+    Logger.debug("NodeRegistry.lookup(#{inspect id}) -> #{inspect result}")
     result
   end
 

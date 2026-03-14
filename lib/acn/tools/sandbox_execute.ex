@@ -10,6 +10,7 @@ defmodule ACN.Tools.Sandbox.Execute do
         properties: %{
           command: %{type: "string", description: "The binary to run (e.g., mix)"},
           args: %{type: "array", items: %{type: "string"}, description: "List of arguments (e.g., ['test'])"},
+          node_id: %{type: "string", description: "The workspace node ID to run in (default: 'root')"},
           timeout: %{type: "integer", description: "Max execution time in ms (default 5000)"}
         },
         required: ["command", "args"]
@@ -17,5 +18,5 @@ defmodule ACN.Tools.Sandbox.Execute do
     }
   end
 
-  def execute(_args), do: {:error, :use_actuator_directly}
+  def execute(_args, _env), do: {:error, :use_actuator_directly}
 end

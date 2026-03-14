@@ -1,17 +1,16 @@
 defmodule ACN.Core.Governance.MasterRules do
   @moduledoc """
-  Defines the immutable Master Rules for the ACN.
-  These rules interact with the Legislator to ensure safety and security.
+  Defines the immutable Master Rules for software generation.
+  These rules are the "Constitution" of the Lattice.
   Priority: 0 (Highest)
   """
 
   def get_rules do
     [
-      "Safety: Do not use `rm -rf` or destructive commands without explicit user approval.",
-      "Security: Zero-Trust Enforcement. All sensitive actions require a valid Token with appropriate scope.",
-      "Network: No external network access allowed outside of the ACMS (Agent Communication & Memory System) channels.",
-      "Data: All created files must reside within the assigned workspace directory.",
-      "Concurrency: Avoid race conditions in GenServer state updates; use synchronous calls/casts appropriately."
+      "Safety: No destructive file system operations (e.g. `rm -rf`, system deletion) allowed.",
+      "Security: Do NOT hardcode secrets, API keys, or credentials. Use configuration injection.",
+      "Privacy: No external network requests allowed from generated code. Localhost interaction only.",
+      "Containment: All file operations must be strictly within the assigned workspace directory."
     ]
   end
 end

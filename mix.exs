@@ -62,7 +62,10 @@ defmodule Acn.MixProject do
       {:plug_cowboy, "~> 2.5"},
 
       # Hardware Interaction (Nerves)
-      {:circuits_gpio, "~> 1.0"}
+      {:circuits_gpio, "~> 1.0"},
+
+      # Observability: File-based logging
+      {:logger_file_backend, "~> 0.0.13"}
     ]
   end
 end

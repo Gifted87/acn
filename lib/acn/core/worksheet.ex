@@ -5,6 +5,7 @@ defmodule ACN.Core.Worksheet do
   """
   
   defmodule Slot do
+    @derive {Jason.Encoder, only: [:content, :type, :hash, :timestamp]}
     @type t :: %__MODULE__{
       content: any(),
       type: atom(),    # :code | :plan | :text | :rule
@@ -17,7 +18,7 @@ defmodule ACN.Core.Worksheet do
       %__MODULE__{
         content: content,
         type: type,
-        hash: :crypto.hash(:sha256, to_string(content)) |> Base.encode16(),
+        hash: :crypto.hash(:sha256, inspect(content, limit: :infinity)) |> Base.encode16(),
         timestamp: System.system_time(:second)
       }
     end
@@ -47,5 +48,26 @@ defmodule ACN.Core.Worksheet do
     Enum.reduce(ws.slots, %{}, fn {k, slot}, acc ->
       Map.put(acc, k, slot.content)
     end)
+  end
+
+  def save(%__MODULE__{} = ws, base_path) do
+    if base_path do
+      # If the path points to a file (e.g., math.js), we want to save the worksheet in its parent directory
+      real_base_path = if Path.extname(base_path) != "", do: Path.dirname(base_path), else: base_path
+      file_path = Path.join([real_base_path, ".acn", "worksheet.json"])
+      
+      # Ensure directory exists (redundant safety)
+      File.mkdir_p!(Path.dirname(file_path))
+      
+      case Jason.encode(ws.slots, pretty: true) do
+        {:ok, json} -> 
+           File.write(file_path, json)
+           :ok
+        {:error, reason} ->
+           {:error, reason}
+      end
+    else
+      {:error, :no_path}
+    end
   end
 end

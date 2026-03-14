@@ -1,16 +1,25 @@
 defmodule ACN.Agents.LiveWire do
-  use GenServer
+  use GenServer, restart: :transient
   require Logger
   alias ACN.Core.NodeRegistry
+  alias ACN.Router
+  alias ACN.Observability.Emitter
 
   defmodule State do
-    defstruct stress_level: 0.0, decay_rate: 1.0, history: []
+    defstruct stress_level: 0.0, 
+              decay_rate: 1.0, 
+              history: [], 
+              router: %Router.State{},
+              strike_count: 0,
+              cpu_load: 0.0,
+              node_id: nil
   end
 
   # --- Public API ---
 
-  def start_link(_opts \\ []) do
-    GenServer.start_link(__MODULE__, [], name: via_tuple())
+  def start_link(opts \\ []) do
+    node_id = opts[:node_id] || "root"
+    GenServer.start_link(__MODULE__, opts, name: via_tuple(node_id))
   end
 
   def pain_signal(amount) do
@@ -61,32 +70,111 @@ defmodule ACN.Agents.LiveWire do
     :ok
   end
 
-  defp via_tuple do
-    NodeRegistry.via_tuple(:live_wire, :live_wire)
+  defp via_tuple(node_id \\ "root") do
+    NodeRegistry.via_tuple(:live_wire, "#{node_id}_live_wire")
   end
 
   # --- Server Callbacks ---
 
   @impl true
-  def init(_) do
+  def init(opts) do
+    node_id = opts[:node_id] || "root"
     # Schedule Decay Tick (1000ms)
     :timer.send_interval(1000, :decay_tick)
-    {:ok, %State{}}
+
+    # Initialize Router (Will be enriched in after_init)
+    router_state = %Router.State{
+      agent_role: :live_wire,
+      node_id: node_id,
+      local_directory: Router.discover_local_agents(node_id)
+    }
+
+    send(self(), :after_init)
+
+    {:ok, %State{router: router_state, node_id: node_id}}
   end
 
   @impl true
-  def handle_cast({:pain_signal, amount}, state) do
-    new_stress = min(100.0, state.stress_level + amount)
-
-    check_thresholds(state.stress_level, new_stress)
-
-    {:noreply, %{state | stress_level: new_stress}}
+  def handle_info(:after_init, state) do
+    node_id = state.node_id
+    {:noreply, %{state | node_id: node_id}}
   end
 
   @impl true
   def handle_info(:decay_tick, state) do
     new_stress = max(0.0, state.stress_level - state.decay_rate)
     {:noreply, %{state | stress_level: new_stress}}
+  end
+
+
+  @impl true
+  def handle_cast({:set_local_identity, _identity}, state) do
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_cast({:routed_message, _sender, payload}, state) do
+    GenServer.cast(self(), payload)
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_cast({:pain_signal, amount}, state) do
+    new_stress = min(100.0, state.stress_level + amount)
+
+    state = check_thresholds(state, state.stress_level, new_stress)
+
+    # HSG: Push autonomic vector — non-blocking, zero-contention
+    Emitter.push_autonomic(new_stress, state.strike_count)
+    Emitter.flush_and_broadcast(:monitoring, :stress_tick, state.node_id)
+
+    {:noreply, %{state | stress_level: new_stress}}
+  end
+
+  @impl true
+  def handle_cast({:livewire_alert, payload}, state) do
+    Logger.error("""
+    ==================================================================
+    ⚡ LIVE WIRE TRIGGERED ⚡
+    
+    ISSUE: #{payload.issue}
+    
+    CONTEXT:
+    - Path: #{payload.path}
+    - Task: #{payload.task}
+    - Supervisor: #{inspect(payload.supervisor_pid)}
+    
+    ACTION: SYSTEM FREEZE INITIATED. WAITING FOR HUMAN INTERVENTION.
+    ==================================================================
+    """)
+    
+    # Escalate Stress to Maximum
+    new_stress = 100.0
+
+    # HSG: Emit a critical autonomic event
+    Emitter.push_autonomic(new_stress, state.strike_count)
+    Emitter.flush_and_broadcast(:monitoring, :livewire_freeze, state.node_id)
+    
+    {:noreply, %{state | stress_level: new_stress}}
+  end
+
+  @impl true
+  def handle_cast(:rescue, state) do
+    Logger.info("LiveWire: RESCUE SIGNAL RECEIVED. Resetting stress levels and strikes.")
+    {:noreply, %{state | stress_level: 0.0, strike_count: 0}}
+  end
+
+  @impl true
+  def handle_cast({:fatal_error, reason}, state) do
+    new_strikes = state.strike_count + 1
+    Logger.error("LiveWire: FATAL ERROR RECEIVED. Strike #{new_strikes}: #{reason}")
+    
+    # Broadcast Trauma Alert if Strike 3
+    if new_strikes >= 3 do
+       Router.route({:pain_signal, "Strike 3: #{reason}"}, {:sideways, :pain_signal}, state.router)
+    end
+    
+    {:noreply, %{state | strike_count: new_strikes}}
   end
 
   @impl true
@@ -111,18 +199,21 @@ defmodule ACN.Agents.LiveWire do
     end
   end
 
-  defp check_thresholds(old_val, new_val) do
+  defp check_thresholds(state, old_val, new_val) do
     cond do
-      old_val < 50.0 and new_val >= 50.0 -> broadcast_alert(:warning)
-      old_val < 80.0 and new_val >= 80.0 -> broadcast_alert(:critical)
-      old_val < 95.0 and new_val >= 95.0 -> broadcast_alert(:panic)
-      true -> :ok
+      old_val < 50.0 and new_val >= 50.0 -> broadcast_alert(state, :warning)
+      old_val < 80.0 and new_val >= 80.0 -> broadcast_alert(state, :critical)
+      old_val < 95.0 and new_val >= 95.0 -> broadcast_alert(state, :panic)
+      true -> state
     end
   end
 
-  defp broadcast_alert(level) do
+  defp broadcast_alert(state, level) do
     Logger.warning("LiveWire Alert: System Stress reached #{level} level.")
-    # In Sub-Phase 6.2, we will broadcast this to Phoenix PubSub
-    # Phoenix.PubSub.broadcast(ACN.PubSub, "system_alerts", {:alert, level})
+    # Broadcast to Trauma Line if panic
+    if level == :panic or level == :critical do
+       Router.route({:pain_signal, "Stress Level: #{level}"}, {:sideways, :pain_signal}, state.router)
+    end
+    state
   end
 end

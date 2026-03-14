@@ -22,7 +22,7 @@ defmodule ACN.Infrastructure.Lattice.RPC do
   - {:error, :unreachable}
   - {:error, :payload_too_large}
   """
-  def fast_call(pid, request, timeout \\ @default_timeout) do
+  def fast_call(pid, request, timeout \\ @default_timeout, opts \\ []) do
     if :erlang.term_to_binary(request) |> byte_size() > @max_payload_bytes do
       Logger.error("RPC Safety: Payload too large for #{inspect(pid)}")
       {:error, :payload_too_large}
@@ -32,15 +32,18 @@ defmodule ACN.Infrastructure.Lattice.RPC do
         {:ok, result}
       catch
         :exit, {:timeout, _} ->
-          Logger.warning("RPC Timeout calling #{inspect(pid)}")
+          if !opts[:silent], do: Logger.warning("RPC Timeout calling #{inspect(pid)}")
           {:error, :timeout}
 
         :exit, {{:nodedown, _node}, _} ->
-          Logger.warning("RPC Node Down calling #{inspect(pid)}")
+          if !opts[:silent], do: Logger.warning("RPC Node Down calling #{inspect(pid)}")
           {:error, :unreachable}
 
         :exit, {reason, _} ->
-          Logger.warning("RPC Failed calling #{inspect(pid)}: #{inspect(reason)}")
+          # Silence expected :noproc (process died/finished) if requested
+          if !opts[:silent] or reason != :noproc do
+             Logger.warning("RPC Failed calling #{inspect(pid)}: #{inspect(reason)}")
+          end
           {:error, :unreachable}
       end
     end

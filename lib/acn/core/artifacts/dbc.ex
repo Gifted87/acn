@@ -4,19 +4,23 @@ defmodule ACN.Core.Artifacts.DBC do
   Strict schema for all permanent Artifacts in the ACN.
   """
 
+  @derive Jason.Encoder
   @enforce_keys [:id, :artifact_hash, :fact_text, :timestamp, :author_id]
   defstruct [
-    :id,            # UUID (Global ID)
-    :artifact_hash, # SHA-256 (File Content)
-    :fact_text,     # Semantic Summary (LLM)
-    :vector_id,     # UUID (Qdrant ID, nil if offline)
-    :author_id,     # String
-    :verifier_id,   # String (Validator)
-    :validation_proof, # Map (Validator verdict, test output, proof of correctness)
-    :cost_metrics,  # Map (Tokens, execution time, LiveWire data)
-    :constituents,  # List of child DBC IDs (for intermediate nodes)
-    :timestamp,     # DateTime
-    :provenance_data # Map (Extra context)
+    :id,            # UUID (DBC Unique ID)
+    :artifact_hash, # SHA256 of the artifact content
+    :fact_text,     # Natural Language Description (The Semantic Anchor)
+    :acms_node_id,  # UUID (ACMS Node ID, nil if offline)
+    :author_id,     # Agent ID
+    :verifier_id,   # Validator ID
+    :validation_proof, # Map (Evidence)
+    :cost_metrics,  # %{tokens: N, time_ms: T}
+    :constituents,  # List of Child DBC IDs (for Intermediate Nodes)
+    :timestamp,     # DateTime (Creation Time)
+    :provenance_data, # Map (Additional Context)
+    :source_code,   # String (The actual implementation content)
+    :full_path,     # String (Absolute path to the artifact)
+    :filename       # String (Base name of the artifact file)
   ]
 
   def new(attrs) do

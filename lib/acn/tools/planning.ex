@@ -23,36 +23,42 @@ defmodule ACN.Tools.Planning do
               "type" => "string",
               "description" => "Detailed instruction of what this task must achieve."
             },
-            "type" => %{
-              "type" => "string",
-              "enum" => ["leaf", "intermediate"],
-              "description" => "Leaf = Atomic/Executes Code. Intermediate = Sub-Manager/Delegates."
-            },
             "output_directive" => %{
                "type" => "string",
                "description" => "Explicit instruction on what this task must produce (e.g., 'A filepath to the compiled binary', 'The implementation of Foo module'). This dictates the artifact contract."
+            },
+            "merge_slot_id" => %{
+               "type" => "string",
+               "description" => "Optional: Unique identifier for the worksheet slot where the child's result will be merged."
             }
           },
-          "required" => ["name", "description", "type", "output_directive"]
+          "required" => ["name", "description", "output_directive"]
         }
       }
     end
 
-    def execute(args) do
-      # 1. Generate UUID
-      # "Behavior: ... generate a UUID ... and return it to the LLM context."
+    def execute(args, _env) do
+      # 1. Validate required 'name' field
+      uuid = args["name"]
       
-      uuid = args["name"] 
-      # Simplification: Use the slug/name provided by LLM as ID.
-      # This ensures stability in Phase 2 (Linker) without complex memory.
-      
-      # 2. Update GenServer State (via Cast)
-      # We assume self() is the TaskManager GenServer
-      GenServer.cast(self(), {:add_node, uuid, args})
+      cond do
+        is_nil(uuid) ->
+          Logger.error("Tool AddNode: REJECTED - Missing 'name' parameter")
+          {:error, "Missing required parameter 'name'. Please provide a unique task name."}
+        
+        String.trim(uuid) == "" ->
+          Logger.error("Tool AddNode: REJECTED - Empty 'name' parameter")
+          {:error, "Task name cannot be empty. Please provide a valid task name."}
+        
+        true ->
+          # 2. Update GenServer State (via Cast)
+          # We assume self() is the TaskManager GenServer
+          GenServer.cast(self(), {:add_node, uuid, args})
 
-      Logger.debug("Tool AddNode: Queued #{uuid}")
+          Logger.debug("Tool AddNode: Queued #{uuid}")
 
-      {:ok, "Node '#{uuid}' added to plan."}
+          {:ok, "Node '#{uuid}' added to plan."}
+      end
     end
   end
 
@@ -81,7 +87,7 @@ defmodule ACN.Tools.Planning do
       }
     end
 
-    def execute(args) do
+    def execute(args, _env) do
       provider = args["provider_task_id"]
       consumer = args["consumer_task_id"]
 
@@ -95,8 +101,44 @@ defmodule ACN.Tools.Planning do
         true ->
            GenServer.cast(self(), {:add_dependency, provider, consumer})
            Logger.debug("Tool LinkDependency: Queued #{provider} -> #{consumer}")
-           {:ok, "Dependency linked: #{provider} -> #{consumer}"}
+            {:ok, "Dependency linked: #{provider} -> #{consumer}"}
       end
+    end
+  end
+
+  defmodule SubmitExecutionPlan do
+    @behaviour ACN.Tools.ToolBehaviour
+
+    def definition do
+      %{
+        "name" => "submit_execution_plan",
+        "description" => "Submits the final parallelized execution plan.",
+        "parameters" => %{
+          "type" => "object",
+          "properties" => %{
+            "batches" => %{
+              "type" => "array",
+              "items" => %{
+                "type" => "array",
+                "items" => %{
+                  "type" => "object",
+                  "properties" => %{
+                    "id" => %{"type" => "string"}
+                  },
+                  "required" => ["id"]
+                }
+              },
+              "description" => "A list of batches, where each batch is a list of task IDs that can run in parallel."
+            }
+          },
+          "required" => ["batches"]
+        }
+      }
+    end
+
+    def execute(args, _context) do
+      # Logic handled by TaskManager
+      {:ok, "Execution plan submitted: #{length(args["batches"] || [])} batches."}
     end
   end
 end

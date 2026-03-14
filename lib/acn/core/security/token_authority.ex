@@ -25,7 +25,7 @@ defmodule ACN.Core.Security.TokenAuthority do
   end
 
   @doc "Mints a new token with the given scope, resource, and role"
-  def mint_token(private_pem, scope, resource, role \\ "agent", ttl \\ 60) do
+  def mint_token(private_pem, scope, resource, role \\ "agent", ttl \\ 300) do
     if scope not in @valid_scopes, do: raise "Invalid Scope: #{scope}"
 
     signer = Joken.Signer.create("RS256", %{"pem" => private_pem})
@@ -77,12 +77,22 @@ defmodule ACN.Core.Security.TokenAuthority do
         is_map(requested_args) && Map.has_key?(requested_args, "path") -> requested_args["path"]
         is_map(requested_args) && Map.has_key?(requested_args, :command) -> requested_args[:command]
         is_map(requested_args) && Map.has_key?(requested_args, "command") -> requested_args["command"]
+        is_map(requested_args) && Map.has_key?(requested_args, :dest) -> requested_args[:dest]
+        is_map(requested_args) && Map.has_key?(requested_args, "dest") -> requested_args["dest"]
         true -> nil
       end
 
     cond do
       token_resource == "*" -> :ok # Superuser/Root token (use carefully)
-      resource_key == token_resource -> :ok
+      resource_key == token_resource -> :ok # Exact match
+      String.starts_with?(token_resource, "/") and String.starts_with?(resource_key || "", "/") -> 
+         # Directory Scope Check: Is resource_key inside token_resource?
+         rel = Path.relative_to(resource_key, token_resource)
+         if rel != resource_key and not String.starts_with?(rel, "..") do
+           :ok
+         else
+           {:error, :resource_mismatch}
+         end
       true -> {:error, :resource_mismatch}
     end
   end

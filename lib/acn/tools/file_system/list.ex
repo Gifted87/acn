@@ -16,5 +16,5 @@ defmodule ACN.Tools.FileSystem.List do
     }
   end
 
-  def execute(_args), do: {:error, :use_actuator_directly}
+  def execute(_args, _env), do: {:error, :use_actuator_directly}
 end
