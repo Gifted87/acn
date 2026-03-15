@@ -677,10 +677,16 @@ defmodule ACN.Agents.SupervisorAgent do
     # Fix 4B: Spatial Containment (Spawn Guard)
     # The child's workspace MUST be a subdirectory or equal to the parent's workspace.
     parent_workspace = state.args[:path] || ""
-    is_path_valid = parent_workspace == "" or String.starts_with?(child_path, parent_workspace)
+    parent_boundary = 
+      if parent_workspace != "" and Path.extname(parent_workspace) != "" do
+        Path.dirname(parent_workspace)
+      else
+        parent_workspace
+      end
+    is_path_valid = parent_boundary == "" or String.starts_with?(child_path, parent_boundary)
     
     if not is_path_valid do
-      Logger.error("SupervisorAgent: SPATIAL VIOLATION REJECTED. Child path #{child_path} is outside parent bounds #{parent_workspace}")
+      Logger.error("SupervisorAgent: SPATIAL VIOLATION REJECTED. Child path #{child_path} is outside parent bounds #{parent_boundary} (from #{parent_workspace})")
       {:reply, {:error, :spatial_violation}, state}
     else
       # Fix 2A: Removed File.mkdir_p!(child_path) — the Intermediate Legislator

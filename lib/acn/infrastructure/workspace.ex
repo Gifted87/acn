@@ -63,14 +63,27 @@ defmodule ACN.Infrastructure.Workspace do
     # Global absolute root for all ACN workspaces
     global_root = root_path()
     
-    # 1. Determine the effective jail root
-    # If working_path is provided and is inside global_root, we use it as the jail boundary.
-    # This allows nested structures like root/parent/child to work.
+    # 1. Determine the effective jail root.
+    # If working_path is provided and is inside global_root, use it as the boundary.
+    # IMPORTANT: working_path may be a FILE path (e.g. the legislator target_path).
+    # Always normalise to a directory so sibling writes are not falsely rejected.
     node_root = resolve(node_id)
     
-    jail_root = 
+    jail_root =
       if working_path && String.starts_with?(working_path, global_root) do
-        working_path
+        # If it's a regular file on disk, use its parent dir as the jail.
+        # If it doesn't exist yet (pre-creation), also use dirname so that both
+        # the file itself and siblings in the same directory are within bounds.
+        if File.regular?(working_path) do
+          Path.dirname(working_path)
+        else
+          # If it looks like a file (has an extension) treat it as file path too
+          if Path.extname(working_path) != "" do
+            Path.dirname(working_path)
+          else
+            working_path
+          end
+        end
       else
         node_root
       end
@@ -84,9 +97,6 @@ defmodule ACN.Infrastructure.Workspace do
       end
     
     # 3. Security Boundary Check
-    # We must ensure the path is within jail_root AND jail_root is within global_root.
-    # Since jail_root is derived from global_root or node_root (which is inside global_root),
-    # we just need to check if expanded starts with jail_root.
     if String.starts_with?(expanded, jail_root) do
        {:ok, expanded}
     else
@@ -172,8 +182,8 @@ defmodule ACN.Infrastructure.Workspace do
   @doc """
   Touches a file (creates if not exists, updates mtime).
   """
-  def touch(node_id, relative_path) do
-    with {:ok, dest_path} <- safe_path(node_id, relative_path) do
+  def touch(node_id, relative_path, working_path \\ nil) do
+    with {:ok, dest_path} <- safe_path(node_id, relative_path, working_path) do
        # Ensure parent exists
        File.mkdir_p!(Path.dirname(dest_path))
        

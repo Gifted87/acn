@@ -29,6 +29,7 @@ defmodule ACN.Tools.FileSystem.Touch do
   def execute(args, env) do
     path = args["path"] || args[:path]
     node_id = Map.get(env, :node_id, "root")
+    working_path = Map.get(env, :working_path)
 
     Logger.info("Tool [touch] executed for #{path}")
 
@@ -36,7 +37,7 @@ defmodule ACN.Tools.FileSystem.Touch do
     # This is a safe helper behavior for a "smart" touch.
     Path.dirname(path) |> File.mkdir_p!()
 
-    case Workspace.touch(node_id, path) do
+    case Workspace.touch(node_id, path, working_path) do
       {:ok, abs_path} -> 
         {:ok, "Successfully touched #{abs_path}"}
       {:error, reason} -> 

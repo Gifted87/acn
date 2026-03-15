@@ -27,21 +27,29 @@ defmodule ACN.Agents.Actuator.ContractVerifier do
   def verify(_working_path, nil), do: :skip
   def verify(_working_path, []), do: :skip
   def verify(working_path, file_manifest) when is_list(file_manifest) do
+    base_dir = 
+      if Path.extname(working_path) != "" do
+        Path.dirname(working_path)
+      else
+        working_path
+      end
+
     missing =
       file_manifest
       |> Enum.reject(fn relative_path ->
-        abs_path = Path.join(working_path, relative_path)
-        File.exists?(abs_path)
+        abs_path = Path.join(base_dir, relative_path)
+        basename_path = Path.join(base_dir, Path.basename(relative_path))
+        File.exists?(abs_path) or File.exists?(basename_path)
       end)
 
     if Enum.empty?(missing) do
-      Logger.info("ContractVerifier: All #{length(file_manifest)} contracted files verified in #{working_path}.")
+      Logger.info("ContractVerifier: All #{length(file_manifest)} contracted files verified in #{base_dir}.")
       :ok
     else
       Logger.error("""
-      ContractVerifier: CONTRACT VIOLATION in #{working_path}.
+      ContractVerifier: CONTRACT VIOLATION in #{base_dir}.
       Node declared it would produce #{length(file_manifest)} files but #{length(missing)} are MISSING:
-      #{Enum.map_join(missing, "\n", fn f -> "  ✗ #{Path.join(working_path, f)}" end)}
+      #{Enum.map_join(missing, "\n", fn f -> "  ✗ #{Path.join(base_dir, f)}" end)}
       """)
       {:error, missing}
     end
@@ -53,7 +61,14 @@ defmodule ACN.Agents.Actuator.ContractVerifier do
   """
   @spec build_feedback(String.t(), list(String.t())) :: String.t()
   def build_feedback(working_path, missing_files) do
-    file_list = Enum.map_join(missing_files, "\n", fn f -> "  - #{Path.join(working_path, f)}" end)
+    base_dir = 
+      if Path.extname(working_path) != "" do
+        Path.dirname(working_path)
+      else
+        working_path
+      end
+
+    file_list = Enum.map_join(missing_files, "\n", fn f -> "  - #{Path.join(base_dir, f)}" end)
     """
     [CONTRACT VIOLATION]: Your task is not complete. The following files were declared in your blueprint \
     but were NOT created:

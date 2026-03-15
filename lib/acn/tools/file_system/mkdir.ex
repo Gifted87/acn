@@ -21,8 +21,9 @@ defmodule ACN.Tools.FileSystem.Mkdir do
   def execute(args, env) do
     path = args["path"]
     node_id = Map.get(env, :node_id, "root")
+    working_path = Map.get(env, :working_path)
     
-    case ACN.Infrastructure.Workspace.safe_path(node_id, path) do
+    case ACN.Infrastructure.Workspace.safe_path(node_id, path, working_path) do
       {:ok, safe_path} -> 
         case File.mkdir_p(safe_path) do
           :ok -> "Directory created: #{safe_path}"

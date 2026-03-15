@@ -303,9 +303,13 @@ defmodule ACN.Agents.Actuator do
           }
 
           # Phase 1 Fix: Inject node_id into pipeline env for correct workspace resolution.
+          # Use dirname(target_path) — not the file itself — so the jail root is a directory.
           pipeline_env = %{
             node_id: get_in(directive, [:node_id]) || get_in(directive, ["node_id"]) || "root",
-            working_path: get_in(directive, [:target_path]) || get_in(directive, ["target_path"]) || ""
+            working_path: case get_in(directive, [:target_path]) || get_in(directive, ["target_path"]) do
+              p when is_binary(p) and p != "" -> if File.dir?(p), do: p, else: Path.dirname(p)
+              _ -> ""
+            end
           }
 
           # Run Pipeline
@@ -336,19 +340,25 @@ defmodule ACN.Agents.Actuator do
                   true ->
                      # Valid file path - proceed with write
                      node_id = get_in(directive, [:node_id]) || get_in(directive, ["node_id"]) || "root"
-                     
+
                      # Fix 4C: Pass working_path to write_atomic to enforce Workspace Jailing
                      case ACN.Infrastructure.Workspace.write_atomic(node_id, path, code, pipeline_env.working_path) do
-                       {:ok, _abs_path} -> 
+                       {:ok, _abs_path} ->
                          hash = :crypto.hash(:sha256, code) |> Base.encode16()
-                         # Issue 3 Fix: remove redundant push_physical that overwrote diff with nil.
-                         # Issue 3 Fix: push cognitive trace for shadow files
                          Emitter.push_cognitive(%{
                            raw_prompt: inspect(new_buffer, pretty: true),
                            raw_response: msg.content || ""
                          })
                          Emitter.flush_and_broadcast(:execution, :writing, node_id)
                          Router.route({:implementation_written, path, hash}, {:local, sender}, state.router)
+                       {:error, :spatial_violation} ->
+                         # RETRY: The AI chose a path outside its assigned jail.
+                         jail_root = ACN.Infrastructure.Workspace.resolve(node_id)
+                         feedback = "[SPATIAL JAIL VIOLATION] The file path '#{path}' is outside the allowed workspace. " <>
+                                    "You MUST write files inside: #{jail_root}. " <>
+                                    "Revise your target path to be a subpath of that directory."
+                         Logger.error("Actuator: #{feedback}")
+                         Router.route({:action_failure, feedback}, {:local, sender}, state.router)
                        {:error, reason} ->
                          Logger.error("Actuator: Failed to write remediation: #{inspect(reason)}")
                          Router.route({:action_failure, "Filesystem Error: #{inspect(reason)}"}, {:local, sender}, state.router)
@@ -440,9 +450,13 @@ defmodule ACN.Agents.Actuator do
 
           # Phase 1 Fix: Inject node_id and working_path into the pipeline env so
           # that write_to_file tool resolves files within the correct node workspace.
+          # Use dirname(target_path) — not the file itself — so the jail root is a directory.
           pipeline_env = %{
             node_id: get_in(directive, [:node_id]) || get_in(directive, ["node_id"]) || "root",
-            working_path: get_in(directive, [:target_path]) || get_in(directive, ["target_path"]) || ""
+            working_path: case get_in(directive, [:target_path]) || get_in(directive, ["target_path"]) do
+              p when is_binary(p) and p != "" -> if File.dir?(p), do: p, else: Path.dirname(p)
+              _ -> ""
+            end
           }
           
           # Run Pipeline
@@ -476,19 +490,26 @@ defmodule ACN.Agents.Actuator do
                   true ->
                      # Valid file path - proceed with write
                      node_id = get_in(directive, [:node_id]) || get_in(directive, ["node_id"]) || "root"
-                     
+
                      # Fix 4C: Pass working_path to write_atomic to enforce Workspace Jailing
                      case ACN.Infrastructure.Workspace.write_atomic(node_id, path, code, pipeline_env.working_path) do
                        {:ok, _abs_path} ->
                          hash = :crypto.hash(:sha256, code) |> Base.encode16()
-                         # Issue 3 Fix: remove redundant push_physical that overwrote diff with nil.
-                         # Issue 3 Fix: push cognitive trace for shadow files
                          Emitter.push_cognitive(%{
                            raw_prompt: inspect(new_buffer, pretty: true),
                            raw_response: msg.content || ""
                          })
                          Emitter.flush_and_broadcast(:execution, :writing, node_id)
                          Router.route({:implementation_written, path, hash}, {:local, sender}, state.router)
+                       {:error, :spatial_violation} ->
+                         # RETRY: The AI chose a path outside its assigned jail.
+                         # Build feedback so the controller remediation loop can retry with the correct path.
+                         jail_root = ACN.Infrastructure.Workspace.resolve(node_id)
+                         feedback = "[SPATIAL JAIL VIOLATION] The file path '#{path}' is outside the allowed workspace. " <>
+                                    "You MUST write files inside: #{jail_root}. " <>
+                                    "Revise your target path to be a subpath of that directory."
+                         Logger.error("Actuator: #{feedback}")
+                         Router.route({:action_failure, feedback}, {:local, sender}, state.router)
                        {:error, reason} ->
                          Logger.error("Actuator: Failed to write implementation: #{inspect(reason)}")
                          Router.route({:action_failure, "Filesystem Error: #{inspect(reason)}"}, {:local, sender}, state.router)

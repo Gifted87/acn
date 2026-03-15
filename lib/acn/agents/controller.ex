@@ -208,12 +208,15 @@ defmodule ACN.Agents.Controller do
     # Store Token
     token = payload[:security_token] || payload["security_token"]
 
+    working_path = payload[:working_path] || payload["working_path"] || state.working_path
+
     {:noreply, %{state | 
       mode: mode, 
       context: payload, 
       phase: new_phase, 
       security_token: token, 
       node_id: node_id,
+      working_path: working_path,
       original_specification: original_spec,
       specification_depth: spec_depth,
       specification_metadata: spec_metadata
@@ -376,8 +379,9 @@ defmodule ACN.Agents.Controller do
       
       # Let's target the exact lines 325-345.
       
+    env = %{node_id: state.node_id, working_path: state.working_path || ctx[:path] || ctx["path"] || "root"}
     legislative_output =
-      case ACN.AI.Pipeline.run(buffer, ["submit_blueprint", "touch", "submit_legislation"], config) do
+      case ACN.AI.Pipeline.run(buffer, ["submit_blueprint", "touch", "submit_legislation"], config, env) do
         {:ok, msg, new_buffer, _env} ->
            # Issue 3 Fix: push cognitive trace for shadow files
            ACN.Observability.Emitter.push_cognitive(%{
@@ -626,7 +630,9 @@ defmodule ACN.Agents.Controller do
 
      # Phase 3: Check the output contract (file_manifest) before running the Judge.
      # This prevents nodes from claiming success without producing their committed files.
-     file_manifest = state.blueprint_spec[:file_manifest] || state.blueprint_spec["file_manifest"] ||
+     # GUARD: blueprint_spec may be a plain string (spec text) rather than a map.
+     blueprint_spec_map = if is_map(state.blueprint_spec), do: state.blueprint_spec, else: %{}
+     file_manifest = blueprint_spec_map[:file_manifest] || blueprint_spec_map["file_manifest"] ||
                      (state.legislation_result || %{})[:file_manifest] || []
      working_path = state.working_path || Path.dirname(path)
 
@@ -685,6 +691,7 @@ defmodule ACN.Agents.Controller do
        "Unknown"
 
     working_path = 
+      state.working_path ||
       ctx[:working_path] ||
       ctx["working_path"] ||
       ctx[:path] ||
@@ -734,7 +741,8 @@ defmodule ACN.Agents.Controller do
           stop_after_tools: true
         }
 
-        case ACN.AI.Pipeline.run(buffer, ["mkdir", "submit_blueprint", "submit_legislation"], config) do
+        env = %{node_id: state.node_id, working_path: working_path}
+        case ACN.AI.Pipeline.run(buffer, ["mkdir", "submit_blueprint", "submit_legislation"], config, env) do
           {:ok, msg, new_buffer, _} ->
             # Issue 3 Fix: push cognitive trace for shadow files
             ACN.Observability.Emitter.push_cognitive(%{
@@ -776,7 +784,7 @@ defmodule ACN.Agents.Controller do
                       {:ok, args} ->
                         path = args["path"]
                         Logger.info("Bot Command: mkdir #{path}")
-                        ACN.Tools.FileSystem.Mkdir.execute(args, %{})
+                        ACN.Tools.FileSystem.Mkdir.execute(args, %{node_id: state.node_id, working_path: working_path})
                         %{acc | path: path}
                       {:error, _} ->
                         Logger.error("Controller: Failed to decode mkdir arguments: #{args_binary}")
@@ -1221,6 +1229,19 @@ defmodule ACN.Agents.Controller do
             Logger.info("Controller: Child #{task_id} spawned successfully. Monitoring PID: #{inspect(pid)}")
             ref = Process.monitor(pid)
             Map.put(acc_monitors, ref, task_id)
+          {:error, :spatial_violation} ->
+            # RETRY PATH: The planned child path is outside the parent workspace.
+            # Build descriptive feedback so handle_remediation re-runs the AI with
+            # the correct bounds rather than crashing the node.
+            parent_workspace = state.working_path || state.context[:path] || state.context["path"] || ""
+            feedback =
+              "[SPATIAL JAIL VIOLATION] Child task '#{task_id}' was assigned path '#{child_path}' " <>
+              "which is OUTSIDE the parent workspace '#{parent_workspace}'. " <>
+              "All child paths MUST be subdirectories of '#{parent_workspace}'. " <>
+              "Re-plan this task with a corrected path that is nested inside the parent workspace."
+            Logger.error("Controller: #{feedback}")
+            handle_remediation(feedback, state)
+            acc_monitors
           {:error, reason} ->
             Logger.error("Controller: Failed to spawn child #{task_id}: #{inspect(reason)}")
             handle_remediation("Spawn Failure: #{inspect(reason)}", state)
@@ -1258,7 +1279,8 @@ defmodule ACN.Agents.Controller do
      adapter = Application.get_env(:acn, :ai)[:default_adapter] || ACN.AI.Adapters.OllamaAdapter
      config = %{adapter: adapter, opts: [model: profile["model"], temperature: profile["temperature"], tool_choice: "ANY"]}
 
-     case ACN.AI.Pipeline.run(judge_buffer, ["submit_verdict", "upstream_merge"], config) do
+     env = %{node_id: state.node_id, working_path: state.working_path || "root"}
+     case ACN.AI.Pipeline.run(judge_buffer, ["submit_verdict", "upstream_merge"], config, env) do
        {:ok, msg, _, _} ->
          tool_calls = Map.get(msg, :tool_calls) || []
          Logger.info("Judge Bot generated #{length(tool_calls)} tool calls.")
@@ -1445,7 +1467,7 @@ defmodule ACN.Agents.Controller do
            case Jason.decode(args_json) do
               {:ok, args} -> 
                   Logger.info("Controller executing [touch] from Legislator...")
-                  ACN.Tools.FileSystem.Touch.execute(args, %{node_id: state.node_id})
+                  ACN.Tools.FileSystem.Touch.execute(args, %{node_id: state.node_id, working_path: state.working_path})
               _ -> :ok
            end
          "mkdir" ->
@@ -1453,7 +1475,7 @@ defmodule ACN.Agents.Controller do
            case Jason.decode(args_json) do
               {:ok, args} -> 
                   Logger.info("Controller executing [mkdir] from Legislator...")
-                  ACN.Tools.FileSystem.Mkdir.execute(args, %{node_id: state.node_id})
+                  ACN.Tools.FileSystem.Mkdir.execute(args, %{node_id: state.node_id, working_path: state.working_path})
               _ -> :ok
            end
          _ -> :ok
