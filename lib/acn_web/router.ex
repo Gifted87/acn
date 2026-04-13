@@ -8,8 +8,17 @@ defmodule ACNWeb.Router do
     plug :put_secure_browser_headers
   end
 
+  pipeline :api do
+    plug :accepts, ["json"]
+  end
+
   scope "/" do
     pipe_through :browser
     get "/", ACNWeb.PageController, :index
+  end
+
+  scope "/api" do
+    pipe_through :api
+    get "/shadow/:node_id", ACNWeb.PageController, :shadow
   end
 end

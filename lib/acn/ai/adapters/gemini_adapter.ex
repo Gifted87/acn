@@ -16,7 +16,8 @@ defmodule ACN.AI.Adapters.GeminiAdapter do
     req_opts = Keyword.merge(@default_opts, opts)
 
     # Validate API key
-    api_key = config[:api_key] || System.get_env("GEMINI_API_KEY") || "AIzaSyCaJ2Da8f_wVTYgRcLPEFJDF3YkSWpDM-I"
+    api_key = config[:api_key] || System.get_env("GEMINI_API_KEY")
+    
     if is_nil(api_key) or api_key == "" do
       Logger.error("[GeminiAdapter] Missing API key. Set GEMINI_API_KEY environment variable.")
       {:error, :missing_api_key}
@@ -34,36 +35,43 @@ defmodule ACN.AI.Adapters.GeminiAdapter do
 
     # Make API call - PRIORITIZE RUNTIME OPTS
     model = req_opts[:model] || config[:model] || "gemini-3.1-flash-lite-preview"
-    endpoint = "https://generativelanguage.googleapis.com/v1beta/models/#{model}:generateContent"
+    endpoint = "https://aiplatform.googleapis.com/v1/publishers/google/models/#{model}:generateContent?key=#{api_key}"
     
     headers = [
-      {"x-goog-api-key", api_key},
       {"content-type", "application/json"}
     ]
 
     Logger.info("[GeminiAdapter] Calling #{endpoint} (Timeout: #{req_opts[:receive_timeout]}ms)...")
 
-    Logger.info("[GeminiAdapter] Calling #{endpoint} (Timeout: #{req_opts[:receive_timeout]}ms)...")
-
-    make_request_with_retry(endpoint, [json: payload, headers: headers, receive_timeout: req_opts[:receive_timeout], finch: ACN.HTTPClient])
+    make_request_with_retry(endpoint, [json: payload, headers: headers, receive_timeout: req_opts[:receive_timeout], finch: ACN.HTTPClient], 0)
     |> parse_response()
   end
 
-  defp make_request_with_retry(endpoint, req_params) do
+  defp make_request_with_retry(endpoint, req_params, retry_count) do
     case Req.post(endpoint, req_params) do
       {:ok, %Req.Response{status: 200, body: body}} ->
         Logger.info("[GeminiAdapter] Successfully received response.")
         body
 
       {:ok, %Req.Response{status: status, body: body}} ->
-        Logger.error("[GeminiAdapter] API Error (Status: #{status}). Retrying in 5000ms... Body: #{inspect(body)}")
-        Process.sleep(5000)
-        make_request_with_retry(endpoint, req_params)
+        if retry_count < 3 do
+          Logger.error("[GeminiAdapter] API Error (Status: #{status}). Retrying in 5000ms... (Attempt #{retry_count + 1})")
+          Process.sleep(5000)
+          make_request_with_retry(endpoint, req_params, retry_count + 1)
+        else
+          Logger.error("[GeminiAdapter] API Error (Status: #{status}). Max retries reached. Body: #{inspect(body)}")
+          {:error, {:api_error, status, body}}
+        end
 
       {:error, reason} ->
-        Logger.error("[GeminiAdapter] Network/Timeout Error: #{inspect(reason)}. Retrying in 5000ms...")
-        Process.sleep(5000)
-        make_request_with_retry(endpoint, req_params)
+        if retry_count < 3 do
+          Logger.error("[GeminiAdapter] Network/Timeout Error: #{inspect(reason)}. Retrying in 5000ms... (Attempt #{retry_count + 1})")
+          Process.sleep(5000)
+          make_request_with_retry(endpoint, req_params, retry_count + 1)
+        else
+          Logger.error("[GeminiAdapter] Network/Timeout Error: #{inspect(reason)}. Max retries reached.")
+          {:error, {:network_error, reason}}
+        end
     end
   end
 
@@ -207,8 +215,13 @@ defmodule ACN.AI.Adapters.GeminiAdapter do
   end
 
   @doc false
+  def parse_response({:error, _} = error), do: error
   def parse_response(body) do
-    candidates = body["candidates"]
+    # Handle both single response (Map) and streaming response (List)
+    # This prevents the ArgumentError when using streamGenerateContent without stream handling.
+    response_data = if is_list(body), do: List.first(body), else: body
+    
+    candidates = response_data["candidates"]
     
     if is_nil(candidates) or length(candidates) == 0 do
       Logger.error("[GeminiAdapter] No candidates in response: #{inspect(body)}")
@@ -231,7 +244,7 @@ defmodule ACN.AI.Adapters.GeminiAdapter do
         thinking: thinking_content,
         tool_calls: tool_calls,
         finish_reason: finish_reason,
-        token_usage: parse_token_usage(body)
+        token_usage: parse_token_usage(response_data)
       }
 
       {:ok, response}

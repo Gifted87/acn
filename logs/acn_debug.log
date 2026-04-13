@@ -1,0 +1,38 @@
+2026-04-13 17:12:23.421 [info] pid=<0.44.0> module=application_controller function=info_exited/3 Application mnesia exited: :stopped
+2026-04-13 17:12:23.521 [info] pid=<0.551.0> module=ACN.Infrastructure.ClusterManager function=ensure_mnesia_started/0 Mnesia: Started
+2026-04-13 17:12:23.521 [info] pid=<0.551.0> module=ACN.Infrastructure.ClusterManager function=create_tables/0 Mnesia: Table acn_node_registry_v2 already exists
+2026-04-13 17:12:23.521 [info] pid=<0.551.0> module=ACN.Infrastructure.ClusterManager function=create_tables/0 ClusterManager: Deleting table acn_node_registry_v2 (clean_start=true)
+2026-04-13 17:12:24.062 [info] pid=<0.551.0> module=ACN.Infrastructure.ClusterManager function=create_registry_table/0 Mnesia: Table acn_node_registry_v2 created (RAM: true)
+2026-04-13 17:12:24.062 [info] pid=<0.551.0> module=ACN.Infrastructure.ClusterManager function=wait_for_tables/0 Mnesia: Tables ready
+2026-04-13 17:12:24.066 [debug] pid=<0.625.0> module=ACN.Core.AuditBuffer function=init/1 AuditBuffer: Started (flat-file flush disabled — HSG ShadowWriter active).
+2026-04-13 17:12:24.119 [info] pid=<0.628.0> module=ACN.Core.LatticeRegistry function=init/1 Starting Lattice Registry with ACMS backend...
+2026-04-13 17:12:24.292 [debug] pid=<0.645.0> module=ACN.Observability.Schema function=ensure_tables/0 HSG Schema: Table :acn_log_lattice already exists — skipping
+2026-04-13 17:12:24.294 [debug] pid=<0.645.0> module=ACN.Observability.Schema function=ensure_tables/0 HSG Schema: Table :acn_log_cognitive already exists — skipping
+2026-04-13 17:12:24.295 [debug] pid=<0.645.0> module=ACN.Observability.Schema function=ensure_tables/0 HSG Schema: Table :acn_log_physical already exists — skipping
+2026-04-13 17:12:24.295 [debug] pid=<0.645.0> module=ACN.Observability.Schema function=ensure_tables/0 HSG Schema: Table :acn_log_security already exists — skipping
+2026-04-13 17:12:24.298 [debug] pid=<0.645.0> module=ACN.Observability.Schema function=ensure_tables/0 HSG Schema: Table :acn_log_autonomic already exists — skipping
+2026-04-13 17:12:24.305 [info] pid=<0.646.0> module=ACN.Observability.Panopticon function=init/1 Panopticon: Started. Node table: :acn_hsg_nodes. Subscribed to acn:telemetry:all and acn:intent:plan
+2026-04-13 17:12:24.548 [info] pid=<0.653.0> module=Phoenix.Endpoint.Cowboy2Adapter function=start_link/3 Running ACNWeb.Endpoint with cowboy 2.14.2 at 0.0.0.0:5051 (http)
+2026-04-13 17:12:24.566 [info] pid=<0.545.0> module=Phoenix.Endpoint.Supervisor function=log_access_url/3 Access ACNWeb.Endpoint at http://localhost:5051
+2026-04-13 17:12:24.587 [info] pid=<0.96.0> module=ACN.AI.Adapters.GeminiAdapter function=do_chat/5 [GeminiAdapter] Calling https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-3.1-flash-lite-preview:generateContent?key=AQ.Ab8RN6Lr5M5XvcIqEmu3GjrdYW7EfrpZcacvv5NdMiOqYJdV6Q (Timeout: 300000ms)...
+2026-04-13 17:12:26.276 [error] pid=<0.96.0> module=ACN.AI.Adapters.GeminiAdapter function=make_request_with_retry/3 [GeminiAdapter] API Error (Status: 401). Retrying in 5000ms... (Attempt 1)
+2026-04-13 17:12:31.578 [error] pid=<0.96.0> module=ACN.AI.Adapters.GeminiAdapter function=make_request_with_retry/3 [GeminiAdapter] API Error (Status: 401). Retrying in 5000ms... (Attempt 2)
+2026-04-13 17:12:36.783 [error] pid=<0.96.0> module=ACN.AI.Adapters.GeminiAdapter function=make_request_with_retry/3 [GeminiAdapter] API Error (Status: 401). Retrying in 5000ms... (Attempt 3)
+2026-04-13 17:12:42.028 [error] pid=<0.96.0> module=ACN.AI.Adapters.GeminiAdapter function=make_request_with_retry/3 [GeminiAdapter] API Error (Status: 401). Max retries reached. Body: %{"error" => %{"code" => 401, "details" => [%{"@type" => "type.googleapis.com/google.rpc.ErrorInfo", "metadata" => %{"method" => "google.cloud.aiplatform.v1.PredictionService.GenerateContent", "service" => "aiplatform.googleapis.com"}, "reason" => "ACCOUNT_STATE_INVALID"}], "message" => "The bound service account is deleted or disabled. The service account bound to the API key must be active.", "status" => "UNAUTHENTICATED"}}
+2026-04-13 17:12:51.882 [info] pid=<0.44.0> module=application_controller function=info_exited/3 Application mnesia exited: :stopped
+2026-04-13 17:12:52.023 [info] pid=<0.551.0> module=ACN.Infrastructure.ClusterManager function=ensure_mnesia_started/0 Mnesia: Started
+2026-04-13 17:12:52.024 [info] pid=<0.551.0> module=ACN.Infrastructure.ClusterManager function=create_tables/0 Mnesia: Table acn_node_registry_v2 already exists
+2026-04-13 17:12:52.024 [info] pid=<0.551.0> module=ACN.Infrastructure.ClusterManager function=create_tables/0 ClusterManager: Deleting table acn_node_registry_v2 (clean_start=true)
+2026-04-13 17:12:52.584 [info] pid=<0.551.0> module=ACN.Infrastructure.ClusterManager function=create_registry_table/0 Mnesia: Table acn_node_registry_v2 created (RAM: true)
+2026-04-13 17:12:52.585 [info] pid=<0.551.0> module=ACN.Infrastructure.ClusterManager function=wait_for_tables/0 Mnesia: Tables ready
+2026-04-13 17:12:52.591 [debug] pid=<0.627.0> module=ACN.Core.AuditBuffer function=init/1 AuditBuffer: Started (flat-file flush disabled — HSG ShadowWriter active).
+2026-04-13 17:12:52.633 [info] pid=<0.628.0> module=ACN.Core.LatticeRegistry function=init/1 Starting Lattice Registry with ACMS backend...
+2026-04-13 17:12:52.771 [debug] pid=<0.643.0> module=ACN.Observability.Schema function=ensure_tables/0 HSG Schema: Table :acn_log_lattice already exists — skipping
+2026-04-13 17:12:52.772 [debug] pid=<0.643.0> module=ACN.Observability.Schema function=ensure_tables/0 HSG Schema: Table :acn_log_cognitive already exists — skipping
+2026-04-13 17:12:52.773 [debug] pid=<0.643.0> module=ACN.Observability.Schema function=ensure_tables/0 HSG Schema: Table :acn_log_physical already exists — skipping
+2026-04-13 17:12:52.774 [debug] pid=<0.643.0> module=ACN.Observability.Schema function=ensure_tables/0 HSG Schema: Table :acn_log_security already exists — skipping
+2026-04-13 17:12:52.774 [debug] pid=<0.643.0> module=ACN.Observability.Schema function=ensure_tables/0 HSG Schema: Table :acn_log_autonomic already exists — skipping
+2026-04-13 17:12:52.785 [info] pid=<0.644.0> module=ACN.Observability.Panopticon function=init/1 Panopticon: Started. Node table: :acn_hsg_nodes. Subscribed to acn:telemetry:all and acn:intent:plan
+2026-04-13 17:12:53.013 [info] pid=<0.653.0> module=Phoenix.Endpoint.Cowboy2Adapter function=start_link/3 Running ACNWeb.Endpoint with cowboy 2.14.2 at 0.0.0.0:5051 (http)
+2026-04-13 17:12:53.032 [info] pid=<0.545.0> module=Phoenix.Endpoint.Supervisor function=log_access_url/3 Access ACNWeb.Endpoint at http://localhost:5051
+2026-04-13 17:12:53.050 [error] pid=<0.96.0> module=ACN.AI.Adapters.GeminiAdapter function=chat/3 [GeminiAdapter] Missing API key. Set GEMINI_API_KEY environment variable.

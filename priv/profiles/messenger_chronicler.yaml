@@ -35,6 +35,9 @@ system_prompt: |
     <%= if Map.has_key?(@deep_context, :specification_depth) and @deep_context.specification_depth != nil and @deep_context.specification_depth <= 3 do %>
       <%= if Map.has_key?(@deep_context, :original_specification) and @deep_context.original_specification do %>
         <%= indent.(@deep_context.original_specification, 4) %>
+        <%= if @deep_context.specification_depth == 0 do %>
+        - **ROOT MISSION**: You are summarizing at depth 0. Ensure the chronicle reflects the full system vision progress.
+        <% end %>
       <% else %>
         (No original specification provided at root)
       <% end %>

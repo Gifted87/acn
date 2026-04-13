@@ -24,3 +24,46 @@ acn-*.tar
 
 # Temporary files, for example, from tests.
 /tmp/
+ 
+# Environment Variables
+.env
+.env.*
+!.env.example
+
+# Mnesia database files
+Mnesia.*/
+priv/data/mnesia_*/
+
+# Logs
+/logs/
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+venv311/
+env/
+.venv/
+.env/
+
+# Rust (Rustler artifacts)
+**/target/
+native/**/target/
+
+# System and Editor files
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Project-specific generated files
+compiled_codebase.txt
+/reports/
+/scratch/
+.acn/
+.cdms_model/
+.procoder/
+.cmsignore

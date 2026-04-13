@@ -102,18 +102,23 @@ defmodule ACN.Tools.Lattice do
         {:ok, %{pid: pid}} ->
           push_to_parent(pid, slot_id, dbc)
         _ -> 
-           # Ultimate Fallback: Try the local supervisor if ID lookup failed
-           Logger.warning("UpstreamMerge: Could not find node #{parent_id}. Attempting local node fallback.")
            local_node_id = Map.get(env, :node_id, "root")
-           case NodeRegistry.lookup(local_node_id) do
-             {:ok, %{pid: pid}} ->
-               push_to_parent(pid, slot_id, dbc)
-             _ ->
-                # Last ditch: try "root"
-                case NodeRegistry.lookup("root") do
-                  {:ok, %{pid: pid}} -> push_to_parent(pid, slot_id, dbc)
-                  _ -> {:error, "Parent #{parent_id} Not Found and local fallback failed."}
-                end
+           
+           if local_node_id == "root" and to_string(parent_id) in ["nonode@nohost", "", "nil", "root"] do
+             # It's the root node, there is no upstream. 
+             {:ok, dbc}
+           else
+             Logger.warning("UpstreamMerge: Could not find node #{parent_id}. Attempting local node fallback.")
+             case NodeRegistry.lookup(local_node_id) do
+               {:ok, %{pid: pid}} ->
+                 push_to_parent(pid, slot_id, dbc)
+               _ ->
+                  # Last ditch: try "root"
+                  case NodeRegistry.lookup("root") do
+                    {:ok, %{pid: pid}} -> push_to_parent(pid, slot_id, dbc)
+                    _ -> {:error, "Parent #{parent_id} Not Found and local fallback failed."}
+                  end
+             end
            end
       end
     end

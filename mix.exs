@@ -59,6 +59,7 @@ defmodule Acn.MixProject do
 
       # Web / Phoenix (Compatible with Elixir 1.14)
       {:phoenix, "~> 1.6.0"},
+      {:phoenix_html, "~> 3.0"},
       {:plug_cowboy, "~> 2.5"},
 
       # Hardware Interaction (Nerves)

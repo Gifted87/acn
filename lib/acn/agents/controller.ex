@@ -30,6 +30,7 @@ defmodule ACN.Agents.Controller do
       :monitored_tasks,          # INTERMEDIATE: Map of {monitor_ref => task_id} for crash detection
       :is_root,                  # Whether this is the root node of the organism
       :blueprint_spec,           # INTERMEDIATE: Preserved Blueprint Spec for Children
+      :mat_path,                 # Canonical materialized path (e.g. "root.dep_mgmt") — passed from Supervisor
       node_id: nil,              # Unique ID for this node
       policy_retry_count: 0,
       validation_retry_count: 0,
@@ -37,7 +38,8 @@ defmodule ACN.Agents.Controller do
       # Specification Fidelity Fields
       original_specification: nil,   # Full root technical specification
       specification_depth: 0,         # Depth in hierarchy (0=root)
-      specification_metadata: nil     # Metadata about specification
+      specification_metadata: nil,     # Metadata about specification
+      parent_supervisor_pid: nil      # PID of parent supervisor for respawn requests
     ]
   end
 
@@ -146,6 +148,29 @@ defmodule ACN.Agents.Controller do
   end
 
   @impl true
+  def handle_cast({:child_respawned, task_id, new_pid}, state) do
+    Logger.info("Controller: Received notification that child #{task_id} was RESPAWNED (New PID: #{inspect(new_pid)}). Updating monitor.")
+
+    # 1. Update Monitor Map
+    # Find existing monitor for this task_id and demonitor it
+    state.monitored_tasks
+    |> Enum.find(fn {_ref, id} -> id == task_id end)
+    |> case do
+      {ref, _} -> Process.demonitor(ref)
+      nil -> :ok
+    end
+
+    # 2. Add new monitor
+    new_ref = Process.monitor(new_pid)
+    new_monitors = Map.put(state.monitored_tasks || %{}, new_ref, task_id)
+
+    # 3. Clean up batch completions if it was marked failed
+    new_completions = Map.delete(state.batch_completions || %{}, task_id)
+
+    {:noreply, %{state | monitored_tasks: new_monitors, batch_completions: new_completions}}
+  end
+
+  @impl true
   def handle_cast(:rescue, state) do
     Logger.info("Controller: RESCUE SIGNAL RECEIVED. Unfreezing and resetting retry count.")
     # Transition back to legislating to restart the loop
@@ -209,17 +234,28 @@ defmodule ACN.Agents.Controller do
     token = payload[:security_token] || payload["security_token"]
 
     working_path = payload[:working_path] || payload["working_path"] || state.working_path
+    
+    # Capture parent supervisor for respawn requests
+    parent_supervisor = payload[:parent_supervisor_pid] || payload["parent_supervisor_pid"]
 
-    {:noreply, %{state | 
-      mode: mode, 
-      context: payload, 
-      phase: new_phase, 
-      security_token: token, 
+    # Extract mat_path (the canonical hierarchical path like "root.dep_mgmt")
+    # passed explicitly from the Supervisor's TraceContext at handoff time.
+    # This is the value that must be forwarded to grandchildren as parent_node.
+    mat_path = payload[:mat_path] || payload["mat_path"]
+
+    {:noreply, %{state |
+      mode: mode,
+      context: payload,
+      phase: new_phase,
+      security_token: token,
       node_id: node_id,
+      mat_path: mat_path,
       working_path: working_path,
       original_specification: original_spec,
       specification_depth: spec_depth,
-      specification_metadata: spec_metadata
+      specification_metadata: spec_metadata,
+      timer_ref: nil, # Ensure timer is cleared on init
+      parent_supervisor_pid: parent_supervisor
     }}
   end
 
@@ -877,11 +913,16 @@ defmodule ACN.Agents.Controller do
   def handle_cast({:internal_transition, :start_delegation}, state) do
     Logger.info("Delegating Planning to Task Manager with Implementation Package.")
 
-    # Extract parent node ID from context
-    parent_node_id = 
+    # Use the canonical mat_path (e.g. "root.dependency_management") so inject_intent
+    # seeds the ETS id_index with fully-qualified child paths. state.mat_path is set
+    # from the Supervisor's TraceContext at handoff time — it is the only correct
+    # cross-process source (Process.get(:hsg_mat_path) is always nil in this process).
+    parent_node_id =
+      state.mat_path ||
       state.context[:parent_node_id] ||
       state.context["parent_node_id"] ||
-      Node.self()
+      state.node_id ||
+      "root"
 
     # Package implementation details with rules for Task Manager
     implementation_package = %{
@@ -944,45 +985,7 @@ defmodule ACN.Agents.Controller do
 
   @impl true
   def handle_cast({:task_complete, child_id}, state) do
-    child_id = ID.normalize(child_id)
-    Logger.info("Controller: Child Task Completed: #{child_id}")
-
-    # Update completions for current batch
-    new_completions = Map.put(state.batch_completions || %{}, child_id, :completed)
-    
-    # 2024-03-14 Update: Leaf nodes do not manage batches. 
-    # The :task_complete signal for a leaf node (from its local supervisor) 
-    # should NOT trigger batch checking logic.
-    if state.mode == :leaf do
-       Logger.info("Controller: Leaf Node task marked complete in worksheet.")
-       {:noreply, %{state | batch_completions: new_completions}}
-    else
-      current_batch_index = state.current_batch_index || 0
-      current_batch = Enum.at(state.batches || [], current_batch_index)
-
-      if is_nil(current_batch) do
-        Logger.error("Controller: Batch is nil at index #{current_batch_index}")
-        {:noreply, %{state | batch_completions: new_completions}}
-      else
-        # Check if all in current batch are done
-        all_done = Enum.all?(current_batch, fn task ->
-          id = ID.normalize(task[:id] || task["id"])
-          status = Map.get(new_completions, id)
-          Logger.debug("Controller: Checking task #{id} - Status: #{inspect(status)}")
-          status == :completed
-        end)
-
-        Logger.info("Controller: Batch #{current_batch_index} Status - All Done: #{all_done}, Completions: #{inspect(Map.keys(new_completions))}")
-
-        if all_done do
-          Logger.info("Controller: Batch #{current_batch_index} Complete.")
-          GenServer.cast(self(), {:batch_complete, current_batch_index})
-          {:noreply, %{state | batch_completions: new_completions}}
-        else
-          {:noreply, %{state | batch_completions: new_completions}}
-        end
-      end
-    end
+    process_completion(child_id, state)
   end
 
   @impl true
@@ -1072,13 +1075,20 @@ defmodule ACN.Agents.Controller do
       {:ok, _dbc} ->
          Logger.info("Controller: Upstream Merge Successful.")
          
-         if state.is_root do
+         is_root = is_nil(parent_id) or parent_id == "root" or parent_id == state.node_id or erlang_node_atom?(parent_id)
+
+         if is_root do
            # Root node: DO NOT shut down - it needs to stay alive for further orchestration
-           Logger.info("Controller: Root node finalization complete. Supervisor remains active for continued orchestration.")
+           Logger.info("GENESIS COMPLETE: Root Organism Execution Finished! Codebase: #{state.working_path}")
+           # FIX: Emit completed telemetry and genesis_complete signal for root intermediate nodes.
+           Emitter.flush_and_broadcast(state.phase || :delegation, :completed, state.node_id)
+           Phoenix.PubSub.broadcast(ACN.PubSub, "acn:monitor:global", {:genesis_complete, state.node_id, state.working_path})
            {:noreply, %{state | phase: :completed}}
          else
            # Non-root intermediate node: Shut down as expected
            Logger.info("Controller: Non-root node finalization complete. Requesting Shutdown.")
+           # FIX: Emit completed telemetry before shutting down non-root intermediate nodes.
+           Emitter.flush_and_broadcast(state.phase || :delegation, :completed, state.node_id)
            Router.route({:shutdown_request}, {:local, :supervisor}, state.router)
            {:noreply, %{state | phase: :completed}}
          end
@@ -1113,18 +1123,20 @@ defmodule ACN.Agents.Controller do
         new_monitors = Map.delete(state.monitored_tasks, ref)
 
         if reason == :normal or reason == :shutdown do
-          Logger.info("Controller: Monitor detected normal exit for child task: #{task_id} (ignoring for batch completion)")
-          new_state = %{state | monitored_tasks: new_monitors}
-          {:noreply, new_state}
+          Logger.info("Controller: Monitor detected normal exit for child task: #{task_id}. Processing as completion.")
+          process_completion(task_id, %{state | monitored_tasks: new_monitors})
         else
-          Logger.error("Controller: CRITICAL - Child Task #{task_id} CRASHED! Reason: #{inspect(reason)}")
+          Logger.error("Controller: CRITICAL - Child Task #{task_id} CRASHED! Reason: #{inspect(reason)}. Triggering automatic RESPAWN.")
 
-          # Mark as failed in batch completions
+          # Trigger Respawn via Parent Supervisor
+          if state.parent_supervisor_pid do
+             GenServer.cast(state.parent_supervisor_pid, {:respawn_child, task_id})
+          end
+
+          # Mark as failed in batch completions (temporarily, will be cleared on respawn)
           new_completions = Map.put(state.batch_completions || %{}, task_id, :failed)
 
-          # Trigger remediation or fail batch
-          # For now, we'll log and attempt to continue, but ideally this should trigger a retry strategy
-          handle_remediation("Child Task Crash: #{task_id}", %{state | monitored_tasks: new_monitors, batch_completions: new_completions})
+          {:noreply, %{state | monitored_tasks: new_monitors, batch_completions: new_completions}}
         end
     end
   end
@@ -1137,6 +1149,13 @@ defmodule ACN.Agents.Controller do
         GenServer.cast(self(), {:internal_transition, :start_architecting})
         {:noreply, %{state | policy_retry_count: state.policy_retry_count + 1, phase: :architecting}}
      else
+        Logger.error("Controller: Delegation Timeout limit reached. Triggering automatic RESPAWN.")
+        
+        # 2024-03-16: Automated Replacement Trigger
+        if state.parent_supervisor_pid do
+           GenServer.cast(state.parent_supervisor_pid, {:respawn_child, state.node_id})
+        end
+
         Router.route({:fatal_error, "Delegation Timeout limit exceeded"}, {:local, :live_wire}, state.router)
         {:noreply, %{state | phase: :failed}}
      end
@@ -1166,13 +1185,17 @@ defmodule ACN.Agents.Controller do
          parent_id = args["parent_id"]
          
          # Check if this is the root node
-         is_root = parent_id == :nonode@nohost or is_nil(parent_id) or parent_id == state.node_id
+         is_root = is_nil(parent_id) or parent_id == "root" or parent_id == state.node_id
          
          if is_root do
-             Logger.info("Controller: Root node finalization (Retry) complete. Supervisor remains active.")
+             Logger.info("GENESIS COMPLETE: Root Organism Execution Finished (Retry)! Codebase: #{state.working_path}")
+             # FIX: Emit completed telemetry and genesis_complete on retry success.
+             Emitter.flush_and_broadcast(state.phase || :delegation, :completed, state.node_id)
+             Phoenix.PubSub.broadcast(ACN.PubSub, "acn:monitor:global", {:genesis_complete, state.node_id, state.working_path})
              {:noreply, %{state | phase: :completed}}
          else
              Logger.info("Controller: Non-root node finalization (Retry) complete. Requesting Shutdown.")
+             Emitter.flush_and_broadcast(state.phase || :delegation, :completed, state.node_id)
              Router.route({:shutdown_request}, {:local, :supervisor}, state.router)
              {:noreply, %{state | phase: :completed}}
          end
@@ -1207,7 +1230,10 @@ defmodule ACN.Agents.Controller do
           task: task_id,
           description: task[:description] || task["description"],
           path: child_path,
-          parent_node: state.node_id || "root",
+          # Use the canonical mat_path so the grandchild's TraceContext computes
+          # "root.parent.grandchild" instead of bare "parent.grandchild".
+          # state.mat_path is populated at initialize_governance from the Supervisor handoff.
+          parent_node: state.mat_path || state.node_id || "root",
           parent_supervisor_pid: self(),
           output_slot: task_id,
           # INJECT BLUEPRINT INTO CHILD CONTEXT
@@ -1313,6 +1339,8 @@ defmodule ACN.Agents.Controller do
            if is_map(resolved_dbc) and Map.has_key?(resolved_dbc, :id) do
               Logger.info("Controller: Leaf Node Approved & Committed Task. Triggering Shutdown.")
               Router.route({:leaf_shutdown_signal, resolved_dbc}, {:local, :supervisor}, state.router)
+              # FIX: Emit completed telemetry so the dashboard and genesis listener get the signal.
+              Emitter.flush_and_broadcast(state.phase || :execution, :completed, state.node_id)
               {:noreply, %{state | phase: :completed, validation_retry_count: 0}}
            else
               # 2024-03-14 Update: Rerun Judge if approved but no merge.
@@ -1445,8 +1473,58 @@ defmodule ACN.Agents.Controller do
              Logger.error("CRITICAL: Failed to find Supervisor to verify LiveWire Alert.")
           end
 
+          # NEW: Automatic Respawn Trigger
+          if state.parent_supervisor_pid do
+            Logger.warning("Controller: AUTO-RESPAWN triggered for node #{state.node_id} due to terminal failure.")
+            GenServer.cast(state.parent_supervisor_pid, {:respawn_child, state.node_id})
+          end
+
           {:noreply, %{state | phase: :frozen}}
       end
+  end
+
+
+  defp process_completion(child_id, state) do
+    child_id = ID.normalize(child_id)
+    
+    # Check if already completed (prevent duplicate advancement)
+    if Map.get(state.batch_completions || %{}, child_id) == :completed do
+       {:noreply, state}
+    else
+      Logger.info("Controller: Processing completion for Child Task: #{child_id}")
+      
+      # Update completions for current batch
+      new_completions = Map.put(state.batch_completions || %{}, child_id, :completed)
+      
+      # 2024-03-14 Update: Leaf nodes do not manage batches. 
+      if state.mode == :leaf do
+         Logger.info("Controller: Leaf Node task marked complete in worksheet.")
+         {:noreply, %{state | batch_completions: new_completions}}
+      else
+        current_batch_index = state.current_batch_index || 0
+        current_batch = Enum.at(state.batches || [], current_batch_index)
+
+        if is_nil(current_batch) do
+          Logger.error("Controller: Batch is nil at index #{current_batch_index}")
+          {:noreply, %{state | batch_completions: new_completions}}
+        else
+          # Check if all in current batch are done
+          all_done = Enum.all?(current_batch, fn task ->
+            id = ID.normalize(task[:id] || task["id"])
+            status = Map.get(new_completions, id)
+            status == :completed
+          end)
+
+          if all_done do
+            Logger.info("Controller: Batch #{current_batch_index} Complete.")
+            GenServer.cast(self(), {:batch_complete, current_batch_index})
+            {:noreply, %{state | batch_completions: new_completions}}
+          else
+            {:noreply, %{state | batch_completions: new_completions}}
+          end
+        end
+      end
+    end
   end
 
 
@@ -1531,4 +1609,10 @@ defmodule ACN.Agents.Controller do
         {:error, reason}
     end
   end
+
+  # Returns true for Erlang node atoms like :nonode@nohost or "somehost@hostname"
+  # These must never be used as ACN node IDs in the hierarchy
+  defp erlang_node_atom?(v) when is_atom(v),   do: String.contains?(to_string(v), "@")
+  defp erlang_node_atom?(v) when is_binary(v), do: String.contains?(v, "@")
+  defp erlang_node_atom?(_), do: false
 end

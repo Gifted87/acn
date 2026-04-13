@@ -41,9 +41,10 @@ config :acn, :workspace_root, "tmp/acn_workspaces"
 # Phoenix Endpoint Configuration
 config :acn, ACNWeb.Endpoint,
   url: [host: "localhost"],
-  http: [port: 5050],
-  secret_key_base: "VGhpcyBpcyBhIHNlY3JldCBrZXkgYmFzZSBmb3IgZGV2ZWxvcG1lbnQgb25seQ==",
-  live_view: [signing_salt: "acn_live_salt"],
+  http: [ip: {0, 0, 0, 0}, port: 5051],
+  server: true,
+  secret_key_base: System.get_env("SECRET_KEY_BASE") || "VGhpcyBpcyBhIHNlY3JldCBrZXkgYmFzZSBmYWxsYmFjayBmb3IgZGV2",
+  live_view: [signing_salt: System.get_env("LIVE_VIEW_SALT") || "acn_live_salt_fallback"],
   pubsub_server: ACN.PubSub,
   render_errors: [view: ACNWeb.ErrorView, accepts: ~w(html json), layout: false]
 

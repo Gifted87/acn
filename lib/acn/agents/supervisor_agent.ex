@@ -13,6 +13,7 @@ defmodule ACN.Agents.SupervisorAgent do
   alias ACN.Core.Security.TokenAuthority
   alias ACN.Core.Utils.ID
   alias ACN.Observability.TraceContext
+  alias ACN.Observability.Emitter
 
   defmodule State do
     defstruct [:args, :identity, :current_profile, :worksheet, :router, :parent_supervisor_pid,
@@ -139,6 +140,42 @@ defmodule ACN.Agents.SupervisorAgent do
   end
 
   @impl true
+  def handle_info({:DOWN, _ref, :process, pid, reason}, state) do
+    # Handle monitored child exit
+    child_id = 
+      state.children 
+      |> Enum.find(fn {_, info} -> info.pid == pid end) 
+      |> case do
+        {id, _} -> id
+        _ -> "unknown"
+      end
+
+    if reason == :normal or reason == :shutdown do
+      Logger.debug("SupervisorAgent: Child #{child_id} (#PID#{inspect pid}) exited normally.")
+    else
+      Logger.error("SupervisorAgent: Child #{child_id} (#PID#{inspect pid}) CRASHED! Reason: #{inspect reason}")
+    end
+
+    # Explicitly update child status if it still exists in the map
+    # Note: LF signals usually arrive first and set status to :completed, 
+    # but this ensures we don't leak "running" status for dead processes.
+    new_children = 
+      case state.children |> Enum.find(fn {_, info} -> info.pid == pid end) do
+        {id, info} -> 
+           Map.put(state.children, id, %{info | status: (if reason == :normal or reason == :shutdown, do: info.status, else: :failed)})
+        _ -> state.children
+      end
+
+    # Check for deferred shutdown if we were waiting for this pid
+    if state.shutdown_pending and !any_live_children?(%{state | children: new_children}) do
+       Logger.info("Supervisor: Last live child exited. Executing deferred shutdown.")
+       {:stop, :normal, %{state | children: new_children}}
+    else
+       {:noreply, %{state | children: new_children}}
+    end
+  end
+
+  @impl true
   def handle_info({:init_node, args}, state) do
     Logger.info("SupervisorAgent: Bootstrapping Node Identity...")
     GenServer.cast(self(), {:fetch_context, args})
@@ -153,27 +190,36 @@ defmodule ACN.Agents.SupervisorAgent do
   end
 
   @impl true
+  def handle_info({:retry_handoff, payload}, state) do
+    Logger.info("SupervisorAgent: Retrying handoff to controller...")
+    case Router.route({:initialize_governance, payload}, {:local, :controller}, state.router) do
+      {:ok, updated_router} ->
+        node_id = state.args[:task] || state.args["task"] || "root"
+        Phoenix.PubSub.broadcast(ACN.PubSub, "acn:monitor:global", {:node_startup, node_id})
+        {:noreply, %{state | router: updated_router}}
+
+      {:error, reason} ->
+        Logger.error("SupervisorAgent: Handoff retry also failed: #{inspect(reason)}. Giving up.")
+        {:stop, {:shutdown, :handoff_failed}, state}
+    end
+  end
+
+  @impl true
   def handle_info(msg, state) do
     Logger.warning("SupervisorAgent: Received UNHANDLED INFO: #{inspect(msg)}")
     {:noreply, state}
   end
   @impl true
-  def handle_cast({:spawn_child, child_spec}, state) do
-    # Log lineage for complete trace visibility
-    ACN.Observability.AuditLogger.log_lineage(state.node_id, child_spec.id, child_spec.task)
-    
-    # 2024-01-29 PUSH PROTOCOL: Inject Lineage directly into child args.
-    # This ensures the child doesn't need to perform a risky RPC handshake.
-    pushed_lineage = %{
-      parent: self(),
-      grandparent: state.lineage.parent,
-      great_grandparent: state.lineage.grandparent
-    }
-    
-    enriched_spec = Map.put(child_spec, :pushed_lineage, pushed_lineage)
-
-    ACN.Core.NodeSupervisor.start_child_node(enriched_spec)
-    {:noreply, state}
+  def handle_cast({:spawn_child, task}, state) do
+    case perform_child_spawn(task, state) do
+      {:ok, pid, child_args} ->
+        # Update state with child info
+        task_id = ID.normalize(task["id"] || task[:id] || task["name"] || task[:task] || task["task"] || task["node_id"] || task[:node_id])
+        new_children = Map.put(state.children, task_id, %{status: :running, dbc: nil, pid: pid, spec: child_args})
+        {:noreply, %{state | children: new_children}}
+      _ ->
+        {:noreply, state}
+    end
   end
 
   @impl true
@@ -199,10 +245,15 @@ defmodule ACN.Agents.SupervisorAgent do
     # The materialized path is derived from the parent's node_id so all children
     # inherit a globally unique, rooted causal path (e.g. "root.auth.db").
     parent_node_id = args[:parent_node] || args["parent_node"]
+    # Strip only Erlang node atoms (e.g. :nonode@nohost, "host@name").
+    # "root" IS a valid parent prefix — it produces "root.child_task" mat_paths.
     parent_mat_path =
-      if parent_node_id && parent_node_id != "root" && parent_node_id != :root,
-        do: to_string(parent_node_id),
-        else: nil
+      cond do
+        is_nil(parent_node_id) -> nil
+        is_atom(parent_node_id) && String.contains?(to_string(parent_node_id), "@") -> nil
+        is_binary(parent_node_id) && String.contains?(parent_node_id, "@") -> nil
+        true -> to_string(parent_node_id)
+      end
     TraceContext.begin_trace(task_id, parent_mat_path)
 
     # RACE REDUCTION: If this task ID looks like a parallel batch child, add a tiny jitter
@@ -354,44 +405,53 @@ defmodule ACN.Agents.SupervisorAgent do
         
         task_desc = state.args[:task_description] || state.args["task_description"] || state.args[:task_desc_minimal] || "Unknown Task"
 
-    # Determine Identity via AI (Using Full Hydrated Context)
-    vars = %{
-      task: task_desc,
-      deep_context: deep_context
-    }
-    
-      case ProfileLoader.load("supervisor_identity", vars) do
-        {:ok, profile} ->
-          Logger.info("Running Identity Determination Profile...")
-          buffer = ContextBuffer.new(profile["system_prompt"])
-          adapter = Application.get_env(:acn, :ai)[:default_adapter] || ACN.AI.Adapters.OllamaAdapter
-          config = %{
-            adapter: adapter, 
-            stop_after_tools: true,
-            opts: [model: profile["model"], temperature: profile["temperature"], tool_choice: "ANY"]
+        # DEPTH CEILING ENFORCEMENT
+        # If we are at depth 10 or greater, force this node to be a LEAF to prevent runaway recursion.
+        current_depth = state.args[:specification_depth] || 0
+        if current_depth >= 10 do
+          Logger.warning("🎯 DEPTH CEILING REACHED (Depth: #{current_depth}). Forcing LEAF identity for node: #{state.args[:node_id] || state.args[:task]}")
+          GenServer.cast(self(), {:set_identity, "LEAF", path})
+          {:noreply, %{state | context: deep_context}}
+        else
+          # Determine Identity via AI (Using Full Hydrated Context)
+          vars = %{
+            task: task_desc,
+            deep_context: deep_context
           }
           
-          case Pipeline.run(buffer, ["set_node_identity"], config) do
-            {:ok, msg, _final_buffer, _env} ->
-              if msg.content && String.contains?(msg.content, "Error executing tool") do
-                Logger.error("Identity determination failed silently (Tool Error).")
-                GenServer.cast(self(), {:set_identity, "LEAF", state.args[:path]})
-                {:noreply, %{state | context: deep_context}}
-              else
-                {:noreply, %{state | context: deep_context}}
+          case ProfileLoader.load("supervisor_identity", vars) do
+            {:ok, profile} ->
+              Logger.info("Running Identity Determination Profile...")
+              buffer = ContextBuffer.new(profile["system_prompt"])
+              adapter = Application.get_env(:acn, :ai)[:default_adapter] || ACN.AI.Adapters.OllamaAdapter
+              config = %{
+                adapter: adapter, 
+                stop_after_tools: true,
+                opts: [model: profile["model"], temperature: profile["temperature"], tool_choice: "ANY"]
+              }
+              
+              case Pipeline.run(buffer, ["set_node_identity"], config) do
+                {:ok, msg, _final_buffer, _env} ->
+                  if msg.content && String.contains?(msg.content, "Error executing tool") do
+                    Logger.error("Identity determination failed silently (Tool Error).")
+                    GenServer.cast(self(), {:set_identity, "LEAF", state.args[:path]})
+                    {:noreply, %{state | context: deep_context}}
+                  else
+                    {:noreply, %{state | context: deep_context}}
+                  end
+
+                error ->
+                  Logger.error("Identity Pipeline failed: #{inspect(error)}")
+                  GenServer.cast(self(), {:set_identity, "LEAF", state.args[:path]})
+                  {:noreply, %{state | context: deep_context}}
               end
 
-            error ->
-              Logger.error("Identity Pipeline failed: #{inspect(error)}")
-              GenServer.cast(self(), {:set_identity, "LEAF", state.args[:path]})
-              {:noreply, %{state | context: deep_context}}
+            {:error, reason} ->
+                Logger.error("Failed to load identity profile: #{inspect(reason)}")
+                GenServer.cast(self(), {:set_identity, "LEAF", state.args[:path]})
+                {:noreply, %{state | context: deep_context}}
           end
-
-      {:error, reason} ->
-          Logger.error("Failed to load identity profile: #{inspect(reason)}")
-          GenServer.cast(self(), {:set_identity, "LEAF", state.args[:path]})
-          {:noreply, %{state | context: deep_context}}
-    end
+        end
        end
      end
   end
@@ -486,7 +546,8 @@ defmodule ACN.Agents.SupervisorAgent do
       ctx_map["path"] ||
       "root"
 
-    parent_node_id = state.args[:parent_node] || state.args["parent_node"] || Node.self()
+    # Use the ACN task_id, not the Erlang node name (Node.self() is :nonode@nohost in dev)
+    parent_node_id = state.args[:task] || state.args["task"] || state.args[:node_id] || state.args["node_id"] || "root"
 
     security_token = 
       if state.identity == :leaf do
@@ -506,19 +567,32 @@ defmodule ACN.Agents.SupervisorAgent do
       parent_node_id: parent_node_id,
       node_worksheet: Worksheet.to_map(state.worksheet),
       blueprint_spec: state.args[:blueprint_spec] || state.args["blueprint_spec"],
+      # HSG: Pass the canonical mat_path so the Controller (a separate process with its
+      # own process dictionary) can propagate it to grandchildren without calling
+      # Process.get(:hsg_mat_path), which would always return nil in the Controller.
+      mat_path: TraceContext.current().mat_path,
       # Propagate specification fields
       original_specification: state.args[:original_specification],
       specification_depth: state.args[:specification_depth],
       specification_metadata: state.args[:specification_metadata]
     })
 
-    {:ok, updated_router} = Router.route({:initialize_governance, payload}, {:local, :controller}, state.router)
-    Logger.info("Handoff Complete. Data & Keys sent to Controller. Working Path: #{working_path}")
-    
-    node_id = state.args[:task] || state.args["task"] || "root"
-    Phoenix.PubSub.broadcast(ACN.PubSub, "acn:monitor:global", {:node_startup, node_id})
+    case Router.route({:initialize_governance, payload}, {:local, :controller}, state.router) do
+      {:ok, updated_router} ->
+        Logger.info("Handoff Complete. Data & Keys sent to Controller. Working Path: #{working_path}")
+        node_id = state.args[:task] || state.args["task"] || "root"
+        Phoenix.PubSub.broadcast(ACN.PubSub, "acn:monitor:global", {:node_startup, node_id})
+        {:noreply, %{state | router: updated_router}}
 
-    {:noreply, %{state | router: updated_router}}
+      {:error, :not_found} ->
+        Logger.error("Handoff FAILED: Controller not found in local directory. Node: #{inspect(state.args[:node_id] || state.args[:task])}. Retrying in 500ms...")
+        Process.send_after(self(), {:retry_handoff, payload}, 500)
+        {:noreply, state}
+
+      {:error, reason} ->
+        Logger.error("Handoff FAILED with unexpected error: #{inspect(reason)}. Shutting down node.")
+        {:stop, {:shutdown, reason}, state}
+    end
   end
 
   @impl true
@@ -555,27 +629,45 @@ defmodule ACN.Agents.SupervisorAgent do
     all_complete? = total_children > 0 and completed_count == total_children
     
     parent_id = state.args[:parent_node] || state.args["parent_node"]
-    is_root? = is_nil(parent_id) or parent_id == :root or parent_id == "root"
+    is_root? = is_nil(parent_id) or parent_id == :nonode@nohost or parent_id == state.args[:task] or parent_id == state.args["task"]
     
+    node_id = state.args[:task] || state.args["task"] || state.args[:node_id] || "root"
+
     cond do
+      # FIX: Only treat zero-children as a root-leaf completion if identity has been
+      # confirmed (:leaf). Before identity resolution state.identity is nil, so this
+      # branch used to fire prematurely (Bug #1a).
+      is_root? and total_children == 0 and state.identity == :leaf ->
+        Logger.info("GENESIS COMPLETE: Root Leaf Node execution finished successfully. Codebase: #{state.args[:path]}")
+        Emitter.flush_and_broadcast(state.identity, :completed, node_id)
+        Phoenix.PubSub.broadcast(ACN.PubSub, "acn:monitor:global", {:genesis_complete, node_id, state.args[:path]})
+        {:noreply, %{state | identity: :completed, children: updated_children}}
+
+      # When there are no children yet and identity is not yet resolved, just wait.
       is_root? and total_children == 0 ->
-        Logger.info("GENESIS COMPLETE: Root Leaf Node execution finished successfully.")
-        {:noreply, %{state | identity: :completed, children: updated_children}}
-      
+        Logger.debug("Supervisor: Received leaf_shutdown_signal on root with no tracked children and unresolved identity. Holding.")
+        {:noreply, %{state | children: updated_children}}
+
+      # FIX: Only declare all-complete when the completed count equals TOTAL TRACKED children.
+      # Previously this fired at the end of every batch, not the end of the whole plan (Bug #1b).
+      # The controller's finalize_work path is now the authoritative completion signal for
+      # intermediate roots; this branch remains as a safety net for direct leaf-root topologies.
       is_root? and all_complete? ->
-        Logger.info("GENESIS COMPLETE: All #{total_children} children finished successfully.")
+        Logger.info("GENESIS COMPLETE: All #{total_children} children finished successfully. Codebase: #{state.args[:path]}")
+        Emitter.flush_and_broadcast(state.identity || :execution, :completed, node_id)
+        Phoenix.PubSub.broadcast(ACN.PubSub, "acn:monitor:global", {:genesis_complete, node_id, state.args[:path]})
         {:noreply, %{state | identity: :completed, children: updated_children}}
-      
+
       is_root? ->
         {:noreply, %{state | children: updated_children}}
-      
+
       all_complete? and total_children > 0 and state.identity == :leaf ->
         Logger.info("Supervisor: All #{total_children} children completed (Leaf/Independent). Terminating Node #{state.args[:task]}...")
         {:stop, :normal, %{state | children: updated_children}}
-      
+
       total_children > 0 ->
         {:noreply, %{state | children: updated_children}}
-      
+
       true ->
         Logger.warning("Supervisor: Received Leaf Shutdown Signal but conditions for termination not met (Children: #{total_children}, Identity: #{state.identity}). Ignoring.")
         {:noreply, %{state | children: updated_children}}
@@ -600,6 +692,46 @@ defmodule ACN.Agents.SupervisorAgent do
   def handle_cast({:receive_child_artifact, slot_id, artifact, child_id}, state) do
     new_state = commit_artifact(slot_id, artifact, child_id, state)
     {:noreply, new_state}
+  end
+
+  @impl true
+  def handle_cast({:respawn_child, task_id}, state) do
+    Logger.warning("SupervisorAgent: RESPAWN REQUESTED for child #{task_id}. Attempting restart...")
+
+    case Map.get(state.children, task_id) do
+      %{spec: spec, pid: old_pid} ->
+        # 1. Terminate old process if it's still alive
+        if Process.alive?(old_pid) do
+          Logger.info("SupervisorAgent: Killing old child PID #{inspect(old_pid)}...")
+          Process.exit(old_pid, :kill)
+        end
+
+        # 2. Re-spawn using original spec
+        case ACN.Core.NodeSupervisor.start_child_node(spec) do
+          {:ok, new_pid} ->
+            Logger.info("SupervisorAgent: Child #{task_id} RESPAWNED successfully (PID: #{inspect(new_pid)}).")
+            Process.monitor(new_pid)
+            GenServer.cast(new_pid, {:init_node, spec})
+
+            # Update state with new PID
+            new_children = put_in(state.children, [task_id, :pid], new_pid)
+            new_children = put_in(new_children, [task_id, :status], :running)
+
+            # 3. Notify the local Controller that a child has been replaced
+            # This allows the parent controller to update its monitors
+            Router.route({:child_respawned, task_id, new_pid}, {:local, :controller}, state.router)
+
+            {:noreply, %{state | children: new_children}}
+
+          {:error, reason} ->
+            Logger.error("SupervisorAgent: Failed to respawn child #{task_id}: #{inspect(reason)}")
+            {:noreply, state}
+        end
+
+      _ ->
+        Logger.error("SupervisorAgent: Cannot respawn child #{task_id} - spec not found in state.")
+        {:noreply, state}
+    end
   end
 
   @impl true
@@ -642,136 +774,17 @@ defmodule ACN.Agents.SupervisorAgent do
 
   @impl true
   def handle_call({:spawn_child, task}, _from, state) do
-    task_id = ID.normalize(task["id"] || task[:id] || task["name"] || task[:task] || task["task"] || task["node_id"] || task[:node_id])
-    Logger.info("SupervisorAgent: Spawning child for task #{task_id}")
-    
-    # Use the already-normalized task_id for output_slot to prevent ID mismatch
-    output_slot = task_id
-    
-    Logger.info("SupervisorAgent: Spawning child for task #{task_id}. Task data: #{inspect(task)}")
-    child_raw_path = task["path"] || task[:path]
-    Logger.info("SupervisorAgent: child_raw_path = #{inspect(child_raw_path)}")
-    
-    child_path = 
-      if is_nil(child_raw_path) do
-        parent_path = state.args[:path] || Application.get_env(:acn, :workspace_root) || File.cwd!()
-        
-        # RECURSION TRAP DETECTION: 
-        # If task_id is already a significant segment of parent_path, do not append it.
-        # This prevents paths like /.../auth/auth/auth/auth
-        path_segments = Path.split(parent_path)
-        if task_id in path_segments do
-          Logger.warning("SupervisorAgent: Recursion Trap Detected for #{task_id}. Reuse parent path.")
-          parent_path
-        else
-          Path.join(parent_path, to_string(task_id))
-        end
-      else
-        if Path.type(child_raw_path) == :relative do
-          Path.expand(child_raw_path, state.args[:path] || File.cwd!())
-        else
-          child_raw_path
-        end
-      end
+    case perform_child_spawn(task, state) do
+      {:ok, pid, child_args} ->
+        task_id = ID.normalize(task["id"] || task[:id] || task["name"] || task[:task] || task["task"] || task["node_id"] || task[:node_id])
+        new_children = Map.put(state.children, task_id, %{status: :running, dbc: nil, pid: pid, spec: child_args})
+        {:reply, {:ok, pid}, %{state | children: new_children}}
 
-    # Fix 4B: Spatial Containment (Spawn Guard)
-    # The child's workspace MUST be a subdirectory or equal to the parent's workspace.
-    parent_workspace = state.args[:path] || ""
-    parent_boundary = 
-      if parent_workspace != "" and Path.extname(parent_workspace) != "" do
-        Path.dirname(parent_workspace)
-      else
-        parent_workspace
-      end
-    is_path_valid = parent_boundary == "" or String.starts_with?(child_path, parent_boundary)
-    
-    if not is_path_valid do
-      Logger.error("SupervisorAgent: SPATIAL VIOLATION REJECTED. Child path #{child_path} is outside parent bounds #{parent_boundary} (from #{parent_workspace})")
-      {:reply, {:error, :spatial_violation}, state}
-    else
-      # Fix 2A: Removed File.mkdir_p!(child_path) — the Intermediate Legislator
-      # is the sole owner of directory creation via its mkdir tool call.
-      # Pre-creating the directory here caused every intermediate node's workspace
-      # to be created twice.
-
-
-      if is_nil(task_id) do
-      Logger.error("SupervisorAgent: CRITICAL - Cannot spawn child with nil task ID!")
-      {:reply, {:error, :invalid_task_id}, state}
-    else
-      child_args = %{
-         task: task_id, 
-         path: child_path,
-         parent_node: state.args[:task] || "root", 
-         output_slot: output_slot,
-         task_desc_minimal: task["description"] || task[:description],
-         ancestral_worksheet: state.worksheet,
-         parent_supervisor_pid: self(),
-         node_id: task_id,
-         blueprint_spec: task[:blueprint_spec] || task["blueprint_spec"]
-      }
-      
-      # SPECIFICATION FIDELITY: Propagate original_specification to ALL depths.
-      # Removing the depth <= 3 cliff was a critical fix: deep nodes (depth 4+) were
-      # losing the original spec, causing language/framework hallucinations.
-      current_depth = state.args[:specification_depth] || 0
-      child_depth = if current_depth == 0, do: 2, else: current_depth + 1
-
-      original_spec = state.args[:original_specification]
-      spec_metadata = state.args[:specification_metadata]
-
-      Logger.info("SupervisorAgent: Passing full original specification to child at depth #{child_depth}")
-
-      child_args = Map.merge(child_args, %{
-        original_specification: original_spec,
-        specification_depth: child_depth,
-        specification_metadata: spec_metadata
-      })
-
-      # Fix 1A: Build and inject pushed_lineage so the child SupervisorAgent can
-      # skip the Lineage.handshake() RPC entirely. Without this, every child
-      # spawned via handle_call(:spawn_child) fell through to the fallback RPC,
-      # which crashed when the parent exited before the child completed the call.
-      pushed_lineage = %{
-        parent: self(),
-        parent_id: state.args[:node_id] || state.args["node_id"],
-        grandparent: state.lineage[:parent],
-        grandparent_id: state.lineage[:parent_id],
-        great_grandparent: state.lineage[:grandparent],
-        great_grandparent_id: state.lineage[:grandparent_id]
-      }
-
-      child_args = Map.put(child_args, :pushed_lineage, pushed_lineage)
-
-      case ACN.Core.NodeSupervisor.start_child_node(child_args) do
-        {:ok, child_pid} ->
-           Logger.info("Child Node Spawned: #{inspect(child_pid)}")
-           Process.monitor(child_pid)
-           GenServer.cast(child_pid, {:init_node, child_args})
-           new_children = Map.put(state.children, task_id, %{status: :running, dbc: nil, pid: child_pid})
-           {:reply, {:ok, child_pid}, %{state | children: new_children}}
-
-        {:error, {:already_started, child_pid}} ->
-           if Process.alive?(child_pid) do
-              Logger.info("Child Node #{inspect(task_id)} already active at #{inspect(child_pid)}. Re-initializing (Idempotent).")
-              # Also inject pushed_lineage on re-init
-              GenServer.cast(child_pid, {:init_node, child_args})
-              new_children = Map.put(state.children, task_id, %{status: :running, dbc: nil, pid: child_pid})
-              {:reply, {:ok, child_pid}, %{state | children: new_children}}
-           else
-              Logger.warning("Child Node #{inspect(task_id)} exists in registry but is DEAD (#PID#{inspect child_pid}). Retrying spawn...")
-              # Registry cleanup is async, so we wait a bit or try to force it
-              # For now, we return error so the Controller can retry or remediate
-              {:reply, {:error, :ghost_process_detected}, state}
-           end
-
-        {:error, reason} ->
-           Logger.error("Failed to spawn child node: #{inspect(reason)}")
-           {:reply, {:error, reason}, state}
-      end
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
     end
-    end # Closes "if not is_path_valid do ... else ..."
   end
+
 
   @impl true
   def handle_call(:get_current_state_payload, _from, state) do
@@ -895,6 +908,123 @@ defmodule ACN.Agents.SupervisorAgent do
   end
 
   # --- Private Helpers ---
+
+  defp perform_child_spawn(task, state) do
+    task_id = ID.normalize(task["id"] || task[:id] || task["name"] || task[:task] || task["task"] || task["node_id"] || task[:node_id])
+    Logger.info("SupervisorAgent: Preparing spawn for task #{task_id}")
+
+    # Determine path for child
+    child_raw_path = task["path"] || task[:path]
+    child_path = 
+      if is_nil(child_raw_path) do
+        parent_path = state.args[:path] || Application.get_env(:acn, :workspace_root) || File.cwd!()
+        
+        # RECURSION TRAP DETECTION: 
+        # If task_id is already a significant segment of parent_path, do not append it.
+        # This prevents paths like /.../auth/auth/auth/auth
+        path_segments = Path.split(parent_path)
+        if task_id in path_segments do
+          Logger.warning("SupervisorAgent: Recursion Trap Detected for #{task_id}. Reuse parent path.")
+          parent_path
+        else
+          Path.join(parent_path, to_string(task_id))
+        end
+      else
+        if Path.type(child_raw_path) == :relative do
+          Path.expand(child_raw_path, state.args[:path] || File.cwd!())
+        else
+          child_raw_path
+        end
+      end
+
+    # Spatial Containment (Spawn Guard)
+    parent_workspace = state.args[:path] || ""
+    parent_boundary = 
+      if parent_workspace != "" and Path.extname(parent_workspace) != "" do
+        Path.dirname(parent_workspace)
+      else
+        parent_workspace
+      end
+    is_path_valid = parent_boundary == "" or String.starts_with?(child_path, parent_boundary)
+    
+    if not is_path_valid do
+      Logger.error("SupervisorAgent: SPATIAL VIOLATION REJECTED during spawn. Child path #{child_path} is outside parent bounds #{parent_boundary}")
+      {:error, :spatial_violation}
+    else
+      if is_nil(task_id) do
+        Logger.error("SupervisorAgent: CRITICAL - Cannot spawn child with nil task ID!")
+        {:error, :invalid_task_id}
+      else
+        # Use the full canonical mat_path (e.g. "root.dependency_management") as the
+        # parent prefix for the child's TraceContext so it computes
+        # "root.dependency_management.grandchild" — not bare "dependency_management.grandchild".
+        # Falling back to the flat task_id is only safe for the root node itself.
+        parent_mat_path_for_child =
+          Process.get(:hsg_mat_path) || state.args[:task] || "root"
+
+        child_args = %{
+           task: task_id,
+           path: child_path,
+           parent_node: parent_mat_path_for_child,
+           output_slot: task_id,
+           task_desc_minimal: task["description"] || task[:description],
+           ancestral_worksheet: state.worksheet,
+           parent_supervisor_pid: self(),
+           node_id: task_id,
+           blueprint_spec: task[:blueprint_spec] || task["blueprint_spec"]
+        }
+        
+        # SPECIFICATION FIDELITY: Propagate original_specification to ALL depths.
+        current_depth = state.args[:specification_depth] || 0
+        child_depth = if current_depth == 0, do: 2, else: current_depth + 1
+  
+        Logger.info("SupervisorAgent: Passing full original specification to child at depth #{child_depth}")
+  
+        child_args = Map.merge(child_args, %{
+          original_specification: state.args[:original_specification],
+          specification_depth: child_depth,
+          specification_metadata: state.args[:specification_metadata]
+        })
+  
+        # Build and inject pushed_lineage
+        pushed_lineage = %{
+          parent: self(),
+          parent_id: state.args[:node_id] || state.args["node_id"],
+          grandparent: state.lineage[:parent],
+          grandparent_id: state.lineage[:parent_id],
+          great_grandparent: state.lineage[:grandparent],
+          great_grandparent_id: state.lineage[:grandparent_id]
+        }
+  
+        child_args = Map.put(child_args, :pushed_lineage, pushed_lineage)
+  
+        case ACN.Core.NodeSupervisor.start_child_node(child_args) do
+          {:ok, child_pid} ->
+             Logger.info("Child Node #{task_id} Spawned: #{inspect(child_pid)}")
+             Process.monitor(child_pid)
+             GenServer.cast(child_pid, {:init_node, child_args})
+             
+             # Log lineage for audit
+             ACN.Observability.AuditLogger.log_lineage(state.args[:node_id] || "root", task_id, child_args.task)
+             
+             {:ok, child_pid, child_args}
+  
+          {:error, {:already_started, child_pid}} ->
+             if Process.alive?(child_pid) do
+                Logger.info("Child Node #{task_id} already active. Re-initializing.")
+                GenServer.cast(child_pid, {:init_node, child_args})
+                {:ok, child_pid, child_args}
+             else
+                {:error, :ghost_process_detected}
+             end
+  
+          {:error, reason} -> 
+             Logger.error("Failed to spawn child node: #{inspect(reason)}")
+             {:error, reason}
+        end
+      end
+    end
+  end
 
   defp commit_artifact(slot_id, artifact, child_id, state) do
     slot_id = ID.normalize(slot_id)

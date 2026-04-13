@@ -1,0 +1,26 @@
+Application mnesia exited: :stopped
+Mnesia: Started
+Mnesia: Table acn_node_registry_v2 already exists
+ClusterManager: Deleting table acn_node_registry_v2 (clean_start=true)
+Mnesia: Table acn_node_registry_v2 created (RAM: true)
+Mnesia: Tables ready
+Starting Lattice Registry with ACMS backend...
+Panopticon: Started. Node table: :acn_hsg_nodes. Subscribed to acn:telemetry:all and acn:intent:plan
+Running ACNWeb.Endpoint with cowboy 2.14.2 at 0.0.0.0:5051 (http)
+Access ACNWeb.Endpoint at http://localhost:5051
+[GeminiAdapter] Calling https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-3.1-flash-lite-preview:generateContent?key=AQ.Ab8RN6Lr5M5XvcIqEmu3GjrdYW7EfrpZcacvv5NdMiOqYJdV6Q (Timeout: 300000ms)...
+[GeminiAdapter] API Error (Status: 401). Retrying in 5000ms... (Attempt 1)
+[GeminiAdapter] API Error (Status: 401). Retrying in 5000ms... (Attempt 2)
+[GeminiAdapter] API Error (Status: 401). Retrying in 5000ms... (Attempt 3)
+[GeminiAdapter] API Error (Status: 401). Max retries reached. Body: %{"error" => %{"code" => 401, "details" => [%{"@type" => "type.googleapis.com/google.rpc.ErrorInfo", "metadata" => %{"method" => "google.cloud.aiplatform.v1.PredictionService.GenerateContent", "service" => "aiplatform.googleapis.com"}, "reason" => "ACCOUNT_STATE_INVALID"}], "message" => "The bound service account is deleted or disabled. The service account bound to the API key must be active.", "status" => "UNAUTHENTICATED"}}
+Application mnesia exited: :stopped
+Mnesia: Started
+Mnesia: Table acn_node_registry_v2 already exists
+ClusterManager: Deleting table acn_node_registry_v2 (clean_start=true)
+Mnesia: Table acn_node_registry_v2 created (RAM: true)
+Mnesia: Tables ready
+Starting Lattice Registry with ACMS backend...
+Panopticon: Started. Node table: :acn_hsg_nodes. Subscribed to acn:telemetry:all and acn:intent:plan
+Running ACNWeb.Endpoint with cowboy 2.14.2 at 0.0.0.0:5051 (http)
+Access ACNWeb.Endpoint at http://localhost:5051
+[GeminiAdapter] Missing API key. Set GEMINI_API_KEY environment variable.

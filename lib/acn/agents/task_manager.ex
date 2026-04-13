@@ -148,7 +148,7 @@ defmodule ACN.Agents.TaskManager do
           else
              # Fix 4A: Pass working_path dynamically so extract_batches can validate
              msg_with_context = Map.put(msg, :working_path, package.working_path)
-             batches = extract_batches(msg_with_context)
+             batches = extract_batches(msg_with_context, state.router.node_id)
              
              if batches == [] do
                 if attempts_left > 1 do
@@ -191,7 +191,7 @@ defmodule ACN.Agents.TaskManager do
         
 
 
-  defp extract_batches(msg) do
+  defp extract_batches(msg, node_id) do
      # 1. Try Tool Call (Primary Protocol)
      tool_call_result = 
        case Map.get(msg, :tool_calls) do
@@ -203,9 +203,9 @@ defmodule ACN.Agents.TaskManager do
                 fixed_json = String.replace(args_json, ~r/}\s*,\s*\[/, "], [")
                 case Jason.decode(fixed_json) do
                   {:ok, %{"batches" => b}} when is_list(b) -> 
-                    if validate_task_paths(b, msg[:working_path]), do: {:ok, normalize_ids(b)}, else: :error
+                    if validate_task_paths(b, msg[:working_path]), do: {:ok, normalize_ids(b, node_id)}, else: :error
                   {:ok, list} when is_list(list) -> 
-                    if validate_task_paths(list, msg[:working_path]), do: {:ok, normalize_ids(list)}, else: :error
+                    if validate_task_paths(list, msg[:working_path]), do: {:ok, normalize_ids(list, node_id)}, else: :error
                   _ -> :error
                 end
              _ -> :error
@@ -228,9 +228,9 @@ defmodule ACN.Agents.TaskManager do
 
           case Jason.decode(clean_content) do
             {:ok, %{"batches" => b}} when is_list(b) -> 
-              if validate_task_paths(b, msg[:working_path]), do: normalize_ids(b), else: []
+              if validate_task_paths(b, msg[:working_path]), do: normalize_ids(b, node_id), else: []
             {:ok, list} when is_list(list) -> 
-              if validate_task_paths(list, msg[:working_path]), do: normalize_ids(list), else: []
+              if validate_task_paths(list, msg[:working_path]), do: normalize_ids(list, node_id), else: []
             _ -> 
                Logger.warning("TaskManager: Failed to parse plan from both Tool and Content.")
                Logger.debug("Raw Content: #{String.slice(msg.content || "", 0, 500)}")
@@ -260,11 +260,18 @@ defmodule ACN.Agents.TaskManager do
       Router.route({:plan_failure, reason}, {:local, :controller}, router)
   end
 
-  defp normalize_ids(batches) when is_list(batches) do
+  defp normalize_ids(batches, node_id) when is_list(batches) do
     Enum.map(batches, fn
-      batch when is_list(batch) -> Enum.map(batch, &normalize_task_id/1)
+      batch when is_list(batch) -> 
+        Enum.map(batch, &normalize_task_id/1)
+        |> Enum.reject(fn task -> task[:id] == node_id end)
       task when is_map(task) -> normalize_task_id(task)
       other -> other
+    end)
+    |> Enum.reject(fn 
+      [] -> true
+      task when is_map(task) -> task[:id] == node_id
+      _ -> false
     end)
   end
 

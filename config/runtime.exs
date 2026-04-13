@@ -38,7 +38,7 @@ if config_env() != :test do
     ],
     gemini: [
       api_key: System.get_env("GEMINI_API_KEY"),
-      model: System.get_env("GEMINI_MODEL", "gemini-2.5-flash-lite"),
+      model: System.get_env("GEMINI_MODEL", "gemini-3.1-flash-lite-preview"),
       enable_thinking: true,
       # Safety: Hard timeout for the request itself
       request_timeout: 300_000,

@@ -1,0 +1,5 @@
+17:12:26.276 [error] [GeminiAdapter] API Error (Status: 401). Retrying in 5000ms... (Attempt 1)
+17:12:31.578 [error] [GeminiAdapter] API Error (Status: 401). Retrying in 5000ms... (Attempt 2)
+17:12:36.783 [error] [GeminiAdapter] API Error (Status: 401). Retrying in 5000ms... (Attempt 3)
+17:12:42.028 [error] [GeminiAdapter] API Error (Status: 401). Max retries reached. Body: %{"error" => %{"code" => 401, "details" => [%{"@type" => "type.googleapis.com/google.rpc.ErrorInfo", "metadata" => %{"method" => "google.cloud.aiplatform.v1.PredictionService.GenerateContent", "service" => "aiplatform.googleapis.com"}, "reason" => "ACCOUNT_STATE_INVALID"}], "message" => "The bound service account is deleted or disabled. The service account bound to the API key must be active.", "status" => "UNAUTHENTICATED"}}
+17:12:53.050 [error] [GeminiAdapter] Missing API key. Set GEMINI_API_KEY environment variable.
