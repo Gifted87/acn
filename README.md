@@ -8,8 +8,8 @@ To understand the **Autonomous Cognitive Network (ACN)**, one must first deconst
 *   **Cognitive**: The system does not treat code as mere text strings. It possesses "Consciousness" through its integration with semantic memory (ACMS) and its rigid Deep Context pillars. It reasons about dependencies, architectural intent, and security implications before it writes a single line of code.
 *   **Network (The Lattice)**: This is the most critical distinction. The ACN is not a single, monolithic "chatbot" script. It is a highly concurrent, distributed *lattice* of interconnected, specialized AI agents running on the Erlang/BEAM Virtual Machine. It models a digital ecosystem of neuro-inspired nodes that communicate horizontally (sideways) and vertically (upstream/downstream) to orchestrate massive engineering efforts.
 
-### The Ultimate Goal: AGI-Level, Production-Ready Synthesis
-The purpose of the ACN is to autonomously synthesize complex, production-ready, AGI-grade, and security-hardened backend systems from scratch. 
+### The Ultimate Goal
+The purpose of the ACN is to autonomously synthesize complex, security-hardened backend systems from scratch. 
 
 Modern Large Language Models (LLMs) suffer from severe limitations: context exhaustion, "lazy programming" (e.g., leaving `// TODO: Implement later` stubs), and an inability to maintain architectural cohesion across dozens of files. ACN was built to shatter these limitations. 
 
@@ -21,7 +21,7 @@ ACN achieves production readiness not through a simple prompting mandate, but th
 
 The fatal flaw of attempting to build a complex software system with a standard AI agent is the assumption that a single prompt and a single context window can hold an entire architecture. They cannot. The ACN solves this through **Continuous Recursive Decomposition**.
 
-This continuous and recursive hierarchical task decomposition is the core architectural engine that enables true AGI-level production readiness. Instead of trying to build a 50-file backend in one pass, the ACN operates as a **Fractal Hierarchy**. It conquers complexity by dividing it continuously with more and more intermediate nodes until the task becomes so atomic and simple that a single node can implement it concretely without hallucinating.
+This continuous and recursive hierarchical task decomposition is the core architectural engine that enables true -level production readiness. Instead of trying to build a 50-file backend in one pass, the ACN operates as a **Fractal Hierarchy**. It conquers complexity by dividing it continuously with more and more intermediate nodes until the task becomes so atomic and simple that a single node can implement it concretely without hallucinating.
 
 1.  **The Root Node (The Chief Architect)**: The Genesis command ignites the Root Node with the human's "Prime Directive" (e.g., "Build a scalable, distributed chat backend with JWT auth and Postgres"). The Root Node does not write code. It acts as the Chief Architect, defining the global blueprint and decomposing the prompt into top-level domains (e.g., Auth Subsystem, Database Subsystem, WebSocket Subsystem).
 2.  **Intermediate Nodes (The Middle Managers)**: The Root spawns Intermediate Nodes for each domain. These nodes receive their scoped task and further decompose it. They use the `TaskManager` to generate a Directed Acyclic Graph (DAG) of parallel sub-tasks. They organize these tasks into strict sequential batches (e.g., Batch 1: Database Schemas. Batch 2: Business Logic. Batch 3: API Controllers) to ensure dependencies are resolved chronologically.
@@ -221,9 +221,9 @@ config :acn, :cluster,
 
 ## 12. Conclusion & License
 
-The **Autonomous Cognitive Network** is an open-source framework released under the **MIT License**. 
+*Proprietary Infrastructure for **The Genesis Machine**. Developed by Gift Braimah.*
 
 By utilizing continuous recursive decomposition, strict spatial jailing, deep context propagation, and an associative memory grid, the ACN bridges the gap between simple AI copilots and true Autonomous Software Engineering. It provides the resilient, neuro-inspired foundation required to synthesize the AGI-grade systems of tomorrow.
 
 ***
-*Proprietary Infrastructure for **The Genesis Machine**. Developed by Gift Braimah
+
