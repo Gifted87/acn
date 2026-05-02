@@ -1,8 +1,5 @@
 # Autonomous Cognitive Network (ACN)
 
-**Developed by Gift Braimah for the Autonomous Intelligence Community.**  
-*Licensed under the MIT License. (c) 2026 Autonomous Cognitive Networks.*
-
 ## 1. The Meaning of the System: What is the ACN?
 
 To understand the **Autonomous Cognitive Network (ACN)**, one must first deconstruct its name, as it perfectly encapsulates the system’s fundamental architecture and ultimate objective:
@@ -128,7 +125,7 @@ The ACN maintains a `.shadow` directory that mirrors the generated codebase. For
 
 1.  **Clone the Repository**:
     ```bash
-    git clone https://github.com/autonomous-cognitive-network/acn.git
+    git clone https://github.com/gifted87/acn.git
     cd acn
     ```
 
@@ -229,3 +226,4 @@ The **Autonomous Cognitive Network** is an open-source framework released under 
 By utilizing continuous recursive decomposition, strict spatial jailing, deep context propagation, and an associative memory grid, the ACN bridges the gap between simple AI copilots and true Autonomous Software Engineering. It provides the resilient, neuro-inspired foundation required to synthesize the AGI-grade systems of tomorrow.
 
 ***
+*Proprietary Infrastructure for **The Genesis Machine**. Developed by Gift Braimah
