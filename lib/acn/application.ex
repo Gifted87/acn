@@ -41,6 +41,8 @@ defmodule ACN.Application do
       # {ACN.Agents.SupervisorAgent, [node_id: "root"]},
 
       # AI Services
+      ACN.AI.KeyRotator,
+      ACN.JudicialBrowser,
       {Task.Supervisor, name: ACN.AI.TaskSupervisor},
 
       # Phoenix Web (After agents)

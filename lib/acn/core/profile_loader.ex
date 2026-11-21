@@ -1,6 +1,15 @@
 defmodule ACN.Core.ProfileLoader do
   require Logger
 
+  @response_style_instruction """
+
+  RESPONSE STYLE:
+  Be concise and fast. Give the direct answer or required tool call, and omit
+  preambles, repetition, and explanations that do not help complete the task.
+  Include details only when needed for correctness or explicitly requested.
+  Do not skip required work, checks, or evidence to be brief.
+  """
+
   @doc """
   Loads and parses a YAML profile, supporting EEx variable injection.
   Args:
@@ -45,13 +54,25 @@ defmodule ACN.Core.ProfileLoader do
         end
 
         bindings = Map.to_list(atom_vars) ++ [assigns: atom_vars, indent: indent_fn]
-        
+
         rendered_yaml = EEx.eval_string(raw_yaml, bindings)
 
         # 3. Parse YAML
         case YamlElixir.read_from_string(rendered_yaml) do
-          {:ok, map} -> {:ok, map}
-          {:error, reason} -> {:error, {:parse_error, reason}}
+          {:ok, map} ->
+            map =
+              case Map.get(map, "system_prompt") do
+                prompt when is_binary(prompt) ->
+                  Map.put(map, "system_prompt", prompt <> @response_style_instruction)
+
+                _ ->
+                  map
+              end
+
+            {:ok, map}
+
+          {:error, reason} ->
+            {:error, {:parse_error, reason}}
         end
       rescue
         e ->

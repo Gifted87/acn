@@ -237,7 +237,9 @@ defmodule ACN.Agents.SupervisorAgent do
   @impl true
   def handle_cast({:init_node, args}, state) do
     # 1. Store Genesis Args
-    state = %{state | args: args, parent_supervisor_pid: args[:parent_supervisor_pid], initialized: true}
+    worksheet_path = args[:path] || args["path"] || args[:working_path] || args["working_path"]
+    worksheet = Worksheet.load(worksheet_path)
+    state = %{state | args: args, worksheet: worksheet, parent_supervisor_pid: args[:parent_supervisor_pid], initialized: true}
     task_id = ID.normalize(args[:task] || args["task"] || "root")
     Logger.info("Supervisor Initializing Node: #{task_id}")
 

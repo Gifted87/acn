@@ -120,8 +120,10 @@ defmodule ACN.Infrastructure.MemoryClient do
 
     case Req.post(url, [json: request_body, headers: conf[:headers]] ++ req_options) do
       {:ok, %Req.Response{status: 200, body: %{"results" => results}}} ->
-        # Return raw results to preserve full context (Wisdom)
-        {:ok, results}
+        # Keep full result context while suppressing equivalent content returned
+        # from separate CMS nodes. CMS provides the stable content_identity;
+        # node_id remains available to callers for provenance and traceability.
+        {:ok, deduplicate_results(results)}
 
       {:ok, %Req.Response{status: status}} ->
         Logger.warning("CMS Query Failed with Status: #{status}")
@@ -133,6 +135,32 @@ defmodule ACN.Infrastructure.MemoryClient do
         {:ok, []} 
     end
   end
+
+  defp deduplicate_results(results) when is_list(results) do
+    {kept, _seen} =
+      Enum.reduce(results, {[], MapSet.new()}, fn result, {acc, seen} ->
+        case result_identity(result) do
+          nil -> {[result | acc], seen}
+          identity ->
+            if MapSet.member?(seen, identity) do
+              {acc, seen}
+            else
+              {[result | acc], MapSet.put(seen, identity)}
+            end
+        end
+      end)
+
+    Enum.reverse(kept)
+  end
+
+  defp deduplicate_results(results), do: results
+
+  defp result_identity(result) when is_map(result) do
+    identity = Map.get(result, "content_identity") || Map.get(result, :content_identity)
+    if is_binary(identity) and identity != "", do: {:content, identity}, else: nil
+  end
+
+  defp result_identity(_), do: nil
 
   @doc """
   Checks connectivity to the remote CMS.

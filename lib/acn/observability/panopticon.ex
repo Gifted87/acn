@@ -151,7 +151,15 @@ defmodule ACN.Observability.Panopticon do
     end
 
     # Seed each child as "initialized" so they show up immediately
+    planned_tasks =
+      cond do
+        is_map(planned_tasks) -> [planned_tasks]
+        is_list(planned_tasks) -> planned_tasks
+        true -> []
+      end
+
     Enum.each(planned_tasks, fn task ->
+      task = if is_map(task), do: task, else: %{}
       child_id = to_string(task[:id] || task["id"] || task[:node_id] || task["node_id"] || "")
       if child_id != "" && valid_mat_path?(child_id) do
         # ALWAYS build the full hierarchical path: "root.child_id", "parent.child_id", etc.

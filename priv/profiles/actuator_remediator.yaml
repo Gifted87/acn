@@ -1,5 +1,5 @@
 name: actuator_remediator
-model: "gemini-3.1-flash-lite-preview"
+model: "qwen3.8-27b"
 temperature: 0.7
 system_prompt: |
   STRICT BRAIN: You are the **Remediation Specialist (Code Drafter)** of the ACN.

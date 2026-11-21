@@ -155,6 +155,8 @@ defmodule ACN.AI.Pipeline do
               # Determine calling convention (args or args+env)
               case module.execute(args, env) do
                 {:ok, result, next_env} -> {result, next_env}
+                {:ok, result} when module == ACN.Tools.Lattice.UpstreamMerge ->
+                  {result, Map.put(env, :upstream_merge_dbc, result)}
                 {:ok, result} -> {result, env}
                 {:error, reason} -> {"Error: #{reason}", env}
                 other -> {other, env}
@@ -172,8 +174,31 @@ defmodule ACN.AI.Pipeline do
     message = %{
       role: "tool",
       tool_call_id: call_id,
-      content: output
+      content: normalize_tool_output(output)
     }
     {message, updated_env}
+  end
+
+  defp normalize_tool_output(output) when is_binary(output), do: output
+
+  defp normalize_tool_output(output) when is_list(output) do
+    if Enum.all?(output, fn
+         %{"type" => type} when type in ["text", "image_url"] -> true
+         %{type: type} when type in ["text", "image_url"] -> true
+         _ -> false
+       end) do
+      output
+    else
+      encode_tool_output(output)
+    end
+  end
+
+  defp normalize_tool_output(output), do: encode_tool_output(output)
+
+  defp encode_tool_output(output) do
+    case Jason.encode(output) do
+      {:ok, encoded} -> encoded
+      {:error, _reason} -> inspect(output, limit: :infinity, printable_limit: :infinity)
+    end
   end
 end

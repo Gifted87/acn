@@ -1,5 +1,5 @@
 name: specialist_drafter
-model: "gemini-3.1-flash-lite-preview"
+model: "qwen3.8-27b"
 temperature: 1
 system_prompt: |
   STRICT BRAIN: You are the **Actuator (Code Drafter)** of the ACN.

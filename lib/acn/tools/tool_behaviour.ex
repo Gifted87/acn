@@ -27,8 +27,8 @@ defmodule ACN.Tools.ToolBehaviour do
   - args: Map of arguments (parsed from JSON).
   
   Returns:
-  - {:ok, result_string} : Successful execution output (to be fed back to LLM).
+  - {:ok, result} : Successful execution output (text or multimodal content for the LLM).
   - {:error, reason_string} : Failure message (to be fed back to LLM).
   """
-  @callback execute(args :: map(), env :: map()) :: {:ok, String.t()} | {:error, String.t()}
+  @callback execute(args :: map(), env :: map()) :: {:ok, any()} | {:ok, any(), map()} | {:error, String.t()}
 end

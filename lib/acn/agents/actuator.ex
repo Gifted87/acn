@@ -315,56 +315,22 @@ defmodule ACN.Agents.Actuator do
           # Run Pipeline
           case Pipeline.run(buffer, ["write_to_file"], config, pipeline_env) do
              {:ok, msg, new_buffer, _} ->
-                # Extract details
                 details = extract_execution_details(msg)
-                code = details.code
-                
-                # Prioritize tool path if available, NO DEFAULTS
-                path = 
-                  if details.path && details.path != "" do
-                     details.path
-                  else
-                     directive.target_path
-                  end
-                
-                # STRICT VALIDATION: No defaults, path must be a valid file
-                cond do
-                  is_nil(path) || path == "" ->
-                     Logger.error("Actuator: No file path provided. AI must specify target path in tool call.")
-                     Router.route({:action_failure, "No file path provided by AI or Legislator"}, {:local, sender}, state.router)
-                  
-                  File.dir?(path) ->
-                     Logger.error("Actuator: Path #{path} is a directory, not a file. Legislator must provide file path.")
-                     Router.route({:action_failure, "Path is a directory: #{path}"}, {:local, sender}, state.router)
-                  
-                  true ->
-                     # Valid file path - proceed with write
-                     node_id = get_in(directive, [:node_id]) || get_in(directive, ["node_id"]) || "root"
+                node_id = get_in(directive, [:node_id]) || get_in(directive, ["node_id"]) || "root"
 
-                     # Fix 4C: Pass working_path to write_atomic to enforce Workspace Jailing
-                     case ACN.Infrastructure.Workspace.write_atomic(node_id, path, code, pipeline_env.working_path) do
-                       {:ok, _abs_path} ->
-                         hash = :crypto.hash(:sha256, code) |> Base.encode16()
-                         Emitter.push_cognitive(%{
-                           raw_prompt: inspect(new_buffer, pretty: true),
-                           raw_response: msg.content || ""
-                         })
-                         Emitter.flush_and_broadcast(:execution, :writing, node_id)
-                         Router.route({:implementation_written, path, hash}, {:local, sender}, state.router)
-                       {:error, :spatial_violation} ->
-                         # RETRY: The AI chose a path outside its assigned jail.
-                         jail_root = ACN.Infrastructure.Workspace.resolve(node_id)
-                         feedback = "[SPATIAL JAIL VIOLATION] The file path '#{path}' is outside the allowed workspace. " <>
-                                    "You MUST write files inside: #{jail_root}. " <>
-                                    "Revise your target path to be a subpath of that directory."
-                         Logger.error("Actuator: #{feedback}")
-                         Router.route({:action_failure, feedback}, {:local, sender}, state.router)
-                       {:error, reason} ->
-                         Logger.error("Actuator: Failed to write remediation: #{inspect(reason)}")
-                         Router.route({:action_failure, "Filesystem Error: #{inspect(reason)}"}, {:local, sender}, state.router)
-                     end
+                case persist_outputs(details, directive.target_path, node_id, pipeline_env.working_path) do
+                  {:ok, outputs} ->
+                    Emitter.push_cognitive(%{
+                      raw_prompt: inspect(new_buffer, pretty: true),
+                      raw_response: msg.content || ""
+                    })
+                    Emitter.flush_and_broadcast(:execution, :writing, node_id)
+                    Router.route({:implementation_written, outputs}, {:local, sender}, state.router)
+
+                  {:error, reason} ->
+                    Logger.error("Actuator: Failed to persist all specialist outputs: #{inspect(reason)}")
+                    Router.route({:action_failure, reason}, {:local, sender}, state.router)
                 end
-                
              error ->
                 Logger.error("Remediator AI Failed: #{inspect(error)}")
                 Router.route({:action_failure, "AI Remediation Failed"}, {:local, sender}, state.router)
@@ -462,60 +428,22 @@ defmodule ACN.Agents.Actuator do
           # Run Pipeline
           case Pipeline.run(buffer, ["write_to_file"], config, pipeline_env) do
              {:ok, msg, new_buffer, _} ->
-                # Extract details
                 details = extract_execution_details(msg)
-                code = details.code
-                
-                # Prioritize tool path if available, NO DEFAULTS
-                path = 
-                  if details.path && details.path != "" do
-                     details.path
-                  else
-                     directive.target_path
-                  end
-                
-                # Write Direct
-                Logger.info("Actuator: Writing code to #{path}")
-                
-                # STRICT VALIDATION: No defaults, path must be a valid file
-                cond do
-                  is_nil(path) || path == "" ->
-                     Logger.error("Actuator: No file path provided. AI must specify target path in tool call.")
-                     Router.route({:action_failure, "No file path provided by AI or Legislator"}, {:local, sender}, state.router)
-                  
-                  File.dir?(path) ->
-                     Logger.error("Actuator: Path #{path} is a directory, not a file. Legislator must provide file path.")
-                     Router.route({:action_failure, "Path is a directory: #{path}"}, {:local, sender}, state.router)
-                  
-                  true ->
-                     # Valid file path - proceed with write
-                     node_id = get_in(directive, [:node_id]) || get_in(directive, ["node_id"]) || "root"
+                node_id = get_in(directive, [:node_id]) || get_in(directive, ["node_id"]) || "root"
 
-                     # Fix 4C: Pass working_path to write_atomic to enforce Workspace Jailing
-                     case ACN.Infrastructure.Workspace.write_atomic(node_id, path, code, pipeline_env.working_path) do
-                       {:ok, _abs_path} ->
-                         hash = :crypto.hash(:sha256, code) |> Base.encode16()
-                         Emitter.push_cognitive(%{
-                           raw_prompt: inspect(new_buffer, pretty: true),
-                           raw_response: msg.content || ""
-                         })
-                         Emitter.flush_and_broadcast(:execution, :writing, node_id)
-                         Router.route({:implementation_written, path, hash}, {:local, sender}, state.router)
-                       {:error, :spatial_violation} ->
-                         # RETRY: The AI chose a path outside its assigned jail.
-                         # Build feedback so the controller remediation loop can retry with the correct path.
-                         jail_root = ACN.Infrastructure.Workspace.resolve(node_id)
-                         feedback = "[SPATIAL JAIL VIOLATION] The file path '#{path}' is outside the allowed workspace. " <>
-                                    "You MUST write files inside: #{jail_root}. " <>
-                                    "Revise your target path to be a subpath of that directory."
-                         Logger.error("Actuator: #{feedback}")
-                         Router.route({:action_failure, feedback}, {:local, sender}, state.router)
-                       {:error, reason} ->
-                         Logger.error("Actuator: Failed to write implementation: #{inspect(reason)}")
-                         Router.route({:action_failure, "Filesystem Error: #{inspect(reason)}"}, {:local, sender}, state.router)
-                     end
+                case persist_outputs(details, directive.target_path, node_id, pipeline_env.working_path) do
+                  {:ok, outputs} ->
+                    Emitter.push_cognitive(%{
+                      raw_prompt: inspect(new_buffer, pretty: true),
+                      raw_response: msg.content || ""
+                    })
+                    Emitter.flush_and_broadcast(:execution, :writing, node_id)
+                    Router.route({:implementation_written, outputs}, {:local, sender}, state.router)
+
+                  {:error, reason} ->
+                    Logger.error("Actuator: Failed to persist all specialist outputs: #{inspect(reason)}")
+                    Router.route({:action_failure, reason}, {:local, sender}, state.router)
                 end
-                
              error ->
                 Logger.error("Drafter AI Failed: #{inspect(error)}")
                 Router.route({:action_failure, "AI Generation Failed"}, {:local, sender}, state.router)
@@ -530,28 +458,75 @@ defmodule ACN.Agents.Actuator do
   end
   
   defp extract_execution_details(msg) do
-     # Try to find tool call
-     case Map.get(msg, :tool_calls) do
-        [%{"function" => %{"name" => "write_to_file", "arguments" => args_json}} | _] ->
+     details =
+       (Map.get(msg, :tool_calls) || [])
+       |> Enum.flat_map(fn
+         %{"function" => %{"name" => "write_to_file", "arguments" => args_json}} ->
            case Jason.decode(args_json) do
-               {:ok, args} -> 
-                   %{
-                     code: args["content"], 
-                     path: args["path"]
-                   }
-               _ -> 
-                   %{code: msg.content, path: nil}
+             {:ok, args} -> [%{code: args["content"], path: args["path"]}]
+             _ -> []
            end
-        _ -> 
-           # Fallback: Extract Markdown code block
-           code = 
-             Regex.run(~r/```(?:elixir|python|ex|js|java|go)?\s*(.*?)```/s, msg.content)
-             |> case do
-                 [_, c] -> String.trim(c)
-                 _ -> msg.content # Raw
-             end
-           %{code: code, path: nil}
+
+         _ -> []
+       end)
+
+     case details do
+       [] ->
+         code =
+           Regex.run(~r/```(?:elixir|python|ex|js|java|go)?\s*(.*?)```/s, msg.content || "")
+           |> case do
+             [_, content] -> String.trim(content)
+             _ -> msg.content || ""
+           end
+
+         [%{code: code, path: nil}]
+
+       _ -> details
      end
+  end
+
+  defp persist_outputs(details, fallback_path, node_id, working_path) do
+    allow_fallback_path? = length(details) == 1
+
+    Enum.reduce_while(details, {:ok, []}, fn detail, {:ok, outputs} ->
+      path = detail.path || if(allow_fallback_path?, do: fallback_path, else: nil)
+      code = detail.code
+
+      cond do
+        not is_binary(path) or path == "" ->
+          {:halt, {:error, "A write_to_file call did not provide a file path."}}
+
+        File.dir?(path) ->
+          {:halt, {:error, "Write target is a directory: #{path}"}}
+
+        not is_binary(code) ->
+          {:halt, {:error, "Write call for #{path} did not include text content."}}
+
+        true ->
+          case ACN.Infrastructure.Workspace.write_atomic(node_id, path, code, working_path) do
+            {:ok, abs_path} ->
+              output = %{
+                path: abs_path,
+                content: code,
+                hash: :crypto.hash(:sha256, code) |> Base.encode16()
+              }
+
+              {:cont, {:ok, [output | outputs]}}
+
+            {:error, :spatial_violation} ->
+              jail_root = ACN.Infrastructure.Workspace.resolve(node_id)
+              {:halt, {:error, "[SPATIAL JAIL VIOLATION] '#{path}' is outside the allowed workspace '#{jail_root}'."}}
+
+            {:error, reason} ->
+              {:halt, {:error, "Filesystem write failed for #{path}: #{inspect(reason)}"}}
+          end
+      end
+    end)
+    |> case do
+      {:ok, outputs} when outputs != [] -> {:ok, Enum.reverse(outputs)}
+      {:ok, []} -> {:error, "The specialist returned no file outputs."}
+      error -> error
+    end
   end
 
   defp handle_hardware_gpio(payload, sender, state) do

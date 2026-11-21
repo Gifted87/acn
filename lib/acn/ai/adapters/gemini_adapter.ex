@@ -16,10 +16,10 @@ defmodule ACN.AI.Adapters.GeminiAdapter do
     req_opts = Keyword.merge(@default_opts, opts)
 
     # Validate API key
-    api_key = config[:api_key] || System.get_env("GEMINI_API_KEY")
+    api_key = config[:api_key] || ACN.AI.KeyRotator.get_key()
     
     if is_nil(api_key) or api_key == "" do
-      Logger.error("[GeminiAdapter] Missing API key. Set GEMINI_API_KEY environment variable.")
+      Logger.error("[GeminiAdapter] Missing API key. Please set GEMINI_API_KEYS (comma-separated) or GEMINI_API_KEY in your .env file.")
       {:error, :missing_api_key}
     else
       do_chat(api_key, messages, tools, config, req_opts)

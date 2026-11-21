@@ -36,7 +36,7 @@ defmodule ACN.AI.Tokenizer do
     per_message_overhead = 3
     
     Enum.reduce(messages, 0, fn msg, acc ->
-      content_tokens = count_tokens(msg[:content])
+      content_tokens = count_content_tokens(msg[:content])
       
       # Count tool calls if present (json payload)
       tool_tokens = 
@@ -49,4 +49,16 @@ defmodule ACN.AI.Tokenizer do
       acc + content_tokens + tool_tokens + per_message_overhead
     end)
   end
+
+  defp count_content_tokens(content) when is_binary(content), do: count_tokens(content)
+  defp count_content_tokens(content) when is_list(content) do
+    Enum.reduce(content, 0, fn
+      %{"type" => "image_url"}, count -> count + 1_024
+      %{type: "image_url"}, count -> count + 1_024
+      %{"text" => text}, count when is_binary(text) -> count + count_tokens(text)
+      %{text: text}, count when is_binary(text) -> count + count_tokens(text)
+      block, count -> count + count_tokens(inspect(block))
+    end)
+  end
+  defp count_content_tokens(other), do: count_tokens(other)
 end

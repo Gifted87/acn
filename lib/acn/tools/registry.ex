@@ -20,6 +20,7 @@ defmodule ACN.Tools.Registry do
     "set_node_identity" => ACN.Tools.Supervisor.Identity,
     "submit_legislation" => ACN.Tools.Governance.SubmitLegislation,
     "submit_verdict" => ACN.Tools.Governance.SubmitVerdict,
+    "complete_consolidation" => ACN.Tools.Governance.CompleteConsolidation,
     "submit_mediation" => ACN.Tools.Governance.SubmitMediation,
     "submit_execution_plan" => ACN.Tools.Planning.SubmitExecutionPlan,
 
@@ -31,7 +32,14 @@ defmodule ACN.Tools.Registry do
     "mkdir" => ACN.Tools.FileSystem.Mkdir,
     "submit_plan" => ACN.Tools.Planning.SubmitPlan,
     "submit_chronicle" => ACN.Tools.Communication.SubmitChronicle,
-    "submit_strategy" => ACN.Tools.Strategy.SubmitStrategy
+    "submit_strategy" => ACN.Tools.Strategy.SubmitStrategy,
+    "judicial_read_file" => ACN.Tools.Judicial.ReadFile,
+    "judicial_list_files" => ACN.Tools.Judicial.ListFiles,
+    "judicial_write_file" => ACN.Tools.Judicial.WriteFile,
+    "judicial_apply_patch" => ACN.Tools.Judicial.ApplyPatch,
+    "judicial_parse_ast" => ACN.Tools.Judicial.ParseAst,
+    "judicial_run_command" => ACN.Tools.Judicial.RunCommand,
+    "judicial_browser" => ACN.Tools.Judicial.Browser
   }
 
   @doc """

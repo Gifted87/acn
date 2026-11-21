@@ -104,6 +104,6 @@ system_prompt: |
   YOU ARE STRICTLY MANDATED TO CALL THE TOOL. THAT IS, YOU MUST CALL AND USE THE TOOL!!!
   YOU ARE STRICTLY MANDATED TO CALL THE TOOL. THAT IS, YOU MUST CALL AND USE THE TOOL!!!
   
-model: "gemini-3.1-flash-lite-preview"
+model: "qwen3.8-27b"
 tools: ["set_node_identity"]
 temperature: 1

@@ -1,5 +1,5 @@
 name: messenger_chronicler
-model: "gemini-3.1-flash-lite-preview"
+model: "qwen3.8-27b"
 temperature: 1
 system_prompt: |
   STRICT BRAIN: You are a system summarization node.

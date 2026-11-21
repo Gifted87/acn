@@ -24,8 +24,6 @@ acn-*.tar
 
 # Temporary files, for example, from tests.
 /tmp/
- 
-# Environment Variables
 .env
 .env.*
 !.env.example
@@ -37,6 +35,7 @@ priv/data/mnesia_*/
 # Logs
 /logs/
 *.log
+/priv/judicial_browser/node_modules/
 
 # Python
 __pycache__/

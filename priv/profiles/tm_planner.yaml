@@ -1,6 +1,6 @@
 name: "tm_planner"
 description: "Generates a batched execution plan (DAG) for a task."
-model: "gemini-3-flash-preview"
+model: "qwen3.8-27b"
 temperature: 0.5
 
 system_prompt: |

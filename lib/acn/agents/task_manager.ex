@@ -203,9 +203,9 @@ defmodule ACN.Agents.TaskManager do
                 fixed_json = String.replace(args_json, ~r/}\s*,\s*\[/, "], [")
                 case Jason.decode(fixed_json) do
                   {:ok, %{"batches" => b}} when is_list(b) -> 
-                    if validate_task_paths(b, msg[:working_path]), do: {:ok, normalize_ids(b, node_id)}, else: :error
+                    if validate_task_paths(b, msg[:working_path]), do: {:ok, canonical_batches(b, node_id)}, else: :error
                   {:ok, list} when is_list(list) -> 
-                    if validate_task_paths(list, msg[:working_path]), do: {:ok, normalize_ids(list, node_id)}, else: :error
+                    if validate_task_paths(list, msg[:working_path]), do: {:ok, canonical_batches(list, node_id)}, else: :error
                   _ -> :error
                 end
              _ -> :error
@@ -228,9 +228,9 @@ defmodule ACN.Agents.TaskManager do
 
           case Jason.decode(clean_content) do
             {:ok, %{"batches" => b}} when is_list(b) -> 
-              if validate_task_paths(b, msg[:working_path]), do: normalize_ids(b, node_id), else: []
+              if validate_task_paths(b, msg[:working_path]), do: canonical_batches(b, node_id), else: []
             {:ok, list} when is_list(list) -> 
-              if validate_task_paths(list, msg[:working_path]), do: normalize_ids(list, node_id), else: []
+              if validate_task_paths(list, msg[:working_path]), do: canonical_batches(list, node_id), else: []
             _ -> 
                Logger.warning("TaskManager: Failed to parse plan from both Tool and Content.")
                Logger.debug("Raw Content: #{String.slice(msg.content || "", 0, 500)}")
@@ -260,19 +260,25 @@ defmodule ACN.Agents.TaskManager do
       Router.route({:plan_failure, reason}, {:local, :controller}, router)
   end
 
-  defp normalize_ids(batches, node_id) when is_list(batches) do
-    Enum.map(batches, fn
-      batch when is_list(batch) -> 
-        Enum.map(batch, &normalize_task_id/1)
-        |> Enum.reject(fn task -> task[:id] == node_id end)
-      task when is_map(task) -> normalize_task_id(task)
-      other -> other
-    end)
-    |> Enum.reject(fn 
-      [] -> true
-      task when is_map(task) -> task[:id] == node_id
-      _ -> false
-    end)
+  defp canonical_batches(batches, node_id) when is_list(batches) do
+    if Enum.all?(batches, &is_map/1) do
+      # A flat list of task objects is one parallel batch.
+      [normalize_batch(batches, node_id)]
+    else
+      Enum.map(batches, fn
+        batch when is_list(batch) -> normalize_batch(batch, node_id)
+        task when is_map(task) -> normalize_batch([task], node_id)
+        _ -> []
+      end)
+      |> Enum.reject(&(&1 == []))
+    end
+  end
+
+  defp normalize_batch(batch, node_id) do
+    batch
+    |> Enum.filter(&is_map/1)
+    |> Enum.map(&normalize_task_id/1)
+    |> Enum.reject(&(&1[:id] == node_id))
   end
 
   defp normalize_task_id(task) when is_map(task) do

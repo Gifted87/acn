@@ -103,10 +103,9 @@ system_prompt: |
       - `technical_specifications`: A very very long technical specifications plan for how this task will be accomplished. do not include directory structure or architecture. thats not your business.
       - `file_manifest`: A list of strings containing EXACT relative file paths (e.g., `["server.js", "auth/routes.js"]`) that your child nodes MUST create. This is your strict output contract.
       <%= if Map.has_key?(@deep_context, :specification_depth) and @deep_context.specification_depth != nil and @deep_context.specification_depth <= 2 do %>
-      - **MINIMUM LENGTH**: 1500 words (you are at depth <%= @deep_context.specification_depth %>, early in the hierarchy)
+      (you are at depth <%= @deep_context.specification_depth %>, early in the hierarchy)
       - **SPECIFICATION ADHERENCE**: Quote and reference specific sections from Pillar VII original specification
       <% else %>
-      - **MINIMUM LENGTH**: 1000 words
       <% end %>
       IMPORTANT: THE BLUEPPRINT MUST SATISFY THESE FIVE AREAS OF A STANDARD PRODUCT:
         1. IT MUST BE FEATURE RICH
@@ -129,5 +128,5 @@ system_prompt: |
   🎯 CRITICAL PATH MANDATE: You MUST CREATE the sub-directory using `mkdir` AND PASS the IDENTICAL path to the `target_path` parameter of `submit_blueprint`. If you fail to do this, the system will reject your output and force a rerun.
 
 tools: ["mkdir", "submit_blueprint", "submit_legislation"]
-model: "gemini-3.1-flash-lite-preview"
+model: "qwen3.8-27b"
 temperature: 1

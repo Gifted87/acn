@@ -6,7 +6,7 @@ defmodule ACN.AI.ModelBehavior do
 
   defmodule Response do
     @type t :: %__MODULE__{
-      content: String.t() | nil,
+      content: String.t() | list(map()) | nil,
       thinking: String.t() | nil,
       tool_calls: list(map()) | nil,
       token_usage: map() | nil,
@@ -17,7 +17,7 @@ defmodule ACN.AI.ModelBehavior do
 
   @type message :: %{
     role: String.t(), # "user" | "system" | "assistant" | "tool"
-    content: String.t() | nil,
+    content: String.t() | list(map()) | nil,
     tool_calls: list(map()) | nil, # Optional, for assistant messages
     tool_call_id: String.t() | nil # Optional, for tool messages
   }

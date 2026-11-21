@@ -106,10 +106,51 @@ defmodule ACN.Agents.ContextFetcher do
 
   defp fetch_acms(query) do
     case MemoryClient.query(query, 5) do
-      {:ok, results} -> results
+      {:ok, results} -> deduplicate_acms_results(results)
       _ -> []
     end
   end
+
+  defp deduplicate_acms_results(results) when is_list(results) do
+    {unique, _seen} =
+      Enum.reduce(results, {[], MapSet.new()}, fn result, {kept, seen} ->
+        case acms_result_identity(result) do
+          nil -> {kept ++ [result], seen}
+          identity ->
+            if MapSet.member?(seen, identity) do
+              {kept, seen}
+            else
+              {kept ++ [result], MapSet.put(seen, identity)}
+            end
+        end
+      end)
+
+    if length(unique) < length(results) do
+      Logger.info("ContextFetcher: Deduplicated #{length(results) - length(unique)} ACMS results by artifact identity.")
+    end
+
+    unique
+  end
+
+  defp deduplicate_acms_results(results), do: results
+
+  defp acms_result_identity(result) when is_map(result) do
+    artifact_hash = Map.get(result, :artifact_hash) || Map.get(result, "artifact_hash")
+    id = Map.get(result, :id) || Map.get(result, "id")
+
+    cond do
+      is_binary(artifact_hash) and artifact_hash not in ["", "placeholder", "unknown"] ->
+        {:artifact_hash, artifact_hash}
+
+      is_binary(id) and id != "" ->
+        {:id, id}
+
+      true ->
+        nil
+    end
+  end
+
+  defp acms_result_identity(_), do: nil
 
   defp rpc_call(pid, call, default, opts \\ []) do
     case RPC.fast_call(pid, call, 5000, opts) do
