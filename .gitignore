@@ -66,3 +66,9 @@ compiled_codebase.txt
 .cdms_model/
 .procoder/
 .cmsignore
+
+Mnesia*/
+priv/data/mnesia*/
+priv/data/backups/
+logs/
+test/
